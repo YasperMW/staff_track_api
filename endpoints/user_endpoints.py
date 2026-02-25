@@ -1,0 +1,634 @@
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from database import get_db
+from models.db_models import User, Role, Department
+
+router = APIRouter()
+security = HTTPBearer(auto_error=False)
+
+# Pydantic models for response
+class UserResponse(BaseModel):
+    user_id: str
+    employee_number: str
+    national_id: Optional[str]
+    first_name: str
+    surname: str
+    other_names: Optional[str]
+    suffix: Optional[str]
+    date_of_birth: Optional[str]
+    gender: Optional[str]
+    home_of_origin: Optional[str]
+    traditional_authority: Optional[str]
+    district: Optional[str]
+    current_address: Optional[str]
+    contact_number: Optional[str]
+    email: str
+    marital_status: Optional[str]
+    spouse_name: Optional[str]
+    spouse_contact: Optional[str]
+    date_of_employment: Optional[str]
+    designation: Optional[str]
+    department_id: Optional[str]
+    is_head_of_department: bool
+    phone: Optional[str]
+    role_id: str
+    status: str
+    profile_photo_url: Optional[str]
+    blacklisted_at: Optional[str]
+    blacklisted_reason: Optional[str]
+    registration_timestamp: Optional[str]
+    selfie_verified: bool
+    last_login_at: Optional[str]
+    created_at: str
+    updated_at: str
+    deleted_at: Optional[str]
+    deleted_by: Optional[str]
+    role_name: str
+    department_name: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+class UserProfileResponse(BaseModel):
+    user_id: str
+    employee_number: str
+    first_name: str
+    surname: str
+    other_names: Optional[str]
+    email: str
+    phone: Optional[str]
+    role_name: str
+    department_name: Optional[str]
+    designation: Optional[str]
+    status: str
+    profile_photo_url: Optional[str]
+    last_login_at: Optional[str]
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+class CompleteUserProfileResponse(BaseModel):
+    user_id: str
+    employee_number: str
+    national_id: Optional[str]
+    first_name: str
+    surname: str
+    other_names: Optional[str]
+    suffix: Optional[str]
+    date_of_birth: Optional[str]
+    gender: Optional[str]
+    home_of_origin: Optional[str]
+    traditional_authority: Optional[str]
+    district: Optional[str]
+    current_address: Optional[str]
+    contact_number: Optional[str]
+    email: str
+    marital_status: Optional[str]
+    spouse_name: Optional[str]
+    spouse_contact: Optional[str]
+    date_of_employment: Optional[str]
+    designation_id: Optional[str]
+    department_id: Optional[str]
+    is_head_of_department: bool
+    phone: Optional[str]
+    role_id: str
+    status: str
+    profile_photo_url: Optional[str]
+    blacklisted_at: Optional[str]
+    blacklisted_reason: Optional[str]
+    registration_timestamp: Optional[str]
+    selfie_verified: bool
+    last_login_at: Optional[str]
+    created_at: str
+    updated_at: str
+    deleted_at: Optional[str]
+    deleted_by: Optional[str]
+    role_name: str
+    department_name: Optional[str]
+    designation_name: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+class UsersListResponse(BaseModel):
+    success: bool
+    message: str
+    users: List[UserResponse]
+    total_count: int
+
+# Helper function to get token from Bearer header
+def get_token_from_bearer(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
+    if credentials and credentials.scheme == "Bearer":
+        return credentials.credentials
+    return None
+
+# Helper function to extract email from JWT token
+def get_email_from_token(token: str) -> Optional[str]:
+    try:
+        import jwt
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+        ALGORITHM = os.getenv("ALGORITHM", "HS256")
+        
+        print(f"Decoding token with algorithm: {ALGORITHM}")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        print(f"Token payload: {payload}")
+        email: str = payload.get("sub")
+        print(f"Extracted email: {email}")
+        return email
+    except Exception as e:
+        print(f"Error decoding token: {e}")
+        return None
+
+# Helper function to verify admin role (optional - you may want to restrict access)
+def verify_admin_role(token: str) -> bool:
+    try:
+        import jwt
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+        ALGORITHM = os.getenv("ALGORITHM", "HS256")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role")
+        return user_role in ["admin", "administrator", "hr", "manager"]
+    except:
+        return False
+
+@router.get("/test")
+async def test_endpoint():
+    """Simple test endpoint to check if the router is working"""
+    return {"message": "User endpoints are working", "status": "ok"}
+
+@router.get("/profile", response_model=UserProfileResponse)
+async def get_current_user_profile(
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the profile of the currently authenticated user.
+    """
+    print(f"Profile endpoint called with token: {token is not None}")
+    
+    # Verify authentication
+    if not token:
+        print("No token provided")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    # Extract email from token
+    email = get_email_from_token(token)
+    if not email:
+        print("Could not extract email from token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token - could not extract user information"
+        )
+    
+    try:
+        print(f"Querying user with email: {email}")
+        # Query user by email without joins first
+        user = db.query(User).filter(
+            User.email == email,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            print(f"User not found with email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        print(f"Found user: {user.first_name} {user.surname}")
+        
+        # Get role, department, and designation separately to avoid join issues
+        role_name = "Unknown"
+        department_name = None
+        designation_name = None
+        
+        try:
+            if user.role_id:
+                role = db.query(Role).filter(Role.role_id == user.role_id).first()
+                if role:
+                    role_name = role.name
+        except Exception as e:
+            print(f"Error getting role: {e}")
+        
+        try:
+            if user.department_id:
+                department = db.query(Department).filter(Department.department_id == user.department_id).first()
+                if department:
+                    department_name = department.name
+                    print(f"Found department: {department_name}")
+                else:
+                    print(f"No department found for department_id: {user.department_id}")
+            else:
+                print(f"User has no department_id")
+        except Exception as e:
+            print(f"Error getting department: {e}")
+        
+        try:
+            if user.designation_id:
+                from models.db_models import Designation
+                designation = db.query(Designation).filter(Designation.designation_id == user.designation_id).first()
+                if designation:
+                    designation_name = designation.name
+        except Exception as e:
+            print(f"Error getting designation: {e}")
+        
+        # Return user profile data
+        profile_data = {
+            "user_id": str(user.user_id),
+            "employee_number": user.employee_number,
+            "first_name": user.first_name,
+            "surname": user.surname,
+            "other_names": user.other_names,
+            "email": user.email,
+            "phone": user.phone,
+            "role_name": role_name,
+            "department_name": department_name,
+            "designation": designation_name,
+            "status": user.status,
+            "profile_photo_url": user.profile_photo_url,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+        print(f"Profile response data: {profile_data}")
+        return UserProfileResponse(**profile_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving user profile: {str(e)}"
+        )
+
+@router.get("/profile/complete", response_model=CompleteUserProfileResponse)
+async def get_complete_user_profile(
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the complete profile of the currently authenticated user.
+    Returns all information submitted during account creation.
+    """
+    print(f"Complete profile endpoint called with token: {token is not None}")
+    
+    # Verify authentication
+    if not token:
+        print("No token provided")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    # Extract email from token
+    email = get_email_from_token(token)
+    if not email:
+        print("Could not extract email from token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token - could not extract user information"
+        )
+    
+    try:
+        print(f"Querying complete user profile with email: {email}")
+        # Query user with all relationships
+        user = db.query(User).filter(
+            User.email == email,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            print(f"User not found with email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        print(f"Found complete user: {user.first_name} {user.surname}")
+        
+        # Get related information
+        role_name = user.role.name if user.role else "Unknown"
+        department_name = user.department.name if user.department else None
+        designation_name = user.designation.name if user.designation else None
+        
+        # Return complete user profile data
+        profile_data = {
+            "user_id": str(user.user_id),
+            "employee_number": user.employee_number,
+            "national_id": user.national_id,
+            "first_name": user.first_name,
+            "surname": user.surname,
+            "other_names": user.other_names,
+            "suffix": user.suffix,
+            "date_of_birth": user.date_of_birth.isoformat() if user.date_of_birth else None,
+            "gender": user.gender,
+            "home_of_origin": user.home_of_origin,
+            "traditional_authority": user.traditional_authority,
+            "district": user.district,
+            "current_address": user.current_address,
+            "contact_number": user.contact_number,
+            "email": user.email,
+            "marital_status": user.marital_status,
+            "spouse_name": user.spouse_name,
+            "spouse_contact": user.spouse_contact,
+            "date_of_employment": user.date_of_employment.isoformat() if user.date_of_employment else None,
+            "designation_id": str(user.designation_id) if user.designation_id else None,
+            "department_id": str(user.department_id) if user.department_id else None,
+            "is_head_of_department": user.is_head_of_department,
+            "phone": user.phone,
+            "role_id": str(user.role_id),
+            "status": user.status,
+            "profile_photo_url": user.profile_photo_url,
+            "blacklisted_at": user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+            "blacklisted_reason": user.blacklisted_reason,
+            "registration_timestamp": user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+            "selfie_verified": user.selfie_verified,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+            "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None,
+            "deleted_by": str(user.deleted_by) if user.deleted_by else None,
+            "role_name": role_name,
+            "department_name": department_name,
+            "designation_name": designation_name
+        }
+        print(f"Complete profile response data prepared with {len([k for k, v in profile_data.items() if v is not None])} fields")
+        return CompleteUserProfileResponse(**profile_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Database error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving complete user profile: {str(e)}"
+        )
+
+@router.get("/users", response_model=UsersListResponse)
+async def get_all_users(
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all users from the database.
+    Returns comprehensive user data including roles and departments.
+    """
+    # Verify authentication (optional - remove if you want public access)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    # Verify admin role (optional - remove if you want all authenticated users to access)
+    if not verify_admin_role(token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions to access user data"
+        )
+    
+    try:
+        # Query all users including their roles and departments
+        users = db.query(User).join(Role).outerjoin(Department).all()
+        
+        user_responses = []
+        for user in users:
+            user_data = UserResponse(
+                user_id=str(user.user_id),
+                employee_number=user.employee_number,
+                national_id=user.national_id,
+                first_name=user.first_name,
+                surname=user.surname,
+                other_names=user.other_names,
+                suffix=user.suffix,
+                date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+                gender=user.gender,
+                home_of_origin=user.home_of_origin,
+                traditional_authority=user.traditional_authority,
+                district=user.district,
+                current_address=user.current_address,
+                contact_number=user.contact_number,
+                email=user.email,
+                marital_status=user.marital_status,
+                spouse_name=user.spouse_name,
+                spouse_contact=user.spouse_contact,
+                date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+                designation=user.designation,
+                department_id=str(user.department_id) if user.department_id else None,
+                is_head_of_department=user.is_head_of_department,
+                phone=user.phone,
+                role_id=str(user.role_id),
+                status=user.status,
+                profile_photo_url=user.profile_photo_url,
+                blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+                blacklisted_reason=user.blacklisted_reason,
+                registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+                selfie_verified=user.selfie_verified,
+                last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                created_at=user.created_at.isoformat() if user.created_at else None,
+                updated_at=user.updated_at.isoformat() if user.updated_at else None,
+                deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+                deleted_by=str(user.deleted_by) if user.deleted_by else None,
+                role_name=user.role.name if user.role else "Unknown",
+                department_name=user.department.name if user.department else None
+            )
+            user_responses.append(user_data)
+        
+        return UsersListResponse(
+            success=True,
+            message=f"Successfully retrieved {len(user_responses)} users",
+            users=user_responses,
+            total_count=len(user_responses)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving users: {str(e)}"
+        )
+
+@router.get("/users/active", response_model=UsersListResponse)
+async def get_active_users(
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get only active (non-deleted) users from the database.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    if not verify_admin_role(token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions to access user data"
+        )
+    
+    try:
+        # Query only active users (not deleted)
+        users = db.query(User).join(Role).outerjoin(Department).filter(
+            User.deleted_at.is_(None)
+        ).all()
+        
+        user_responses = []
+        for user in users:
+            user_data = UserResponse(
+                user_id=str(user.user_id),
+                employee_number=user.employee_number,
+                national_id=user.national_id,
+                first_name=user.first_name,
+                surname=user.surname,
+                other_names=user.other_names,
+                suffix=user.suffix,
+                date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+                gender=user.gender,
+                home_of_origin=user.home_of_origin,
+                traditional_authority=user.traditional_authority,
+                district=user.district,
+                current_address=user.current_address,
+                contact_number=user.contact_number,
+                email=user.email,
+                marital_status=user.marital_status,
+                spouse_name=user.spouse_name,
+                spouse_contact=user.spouse_contact,
+                date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+                designation=user.designation,
+                department_id=str(user.department_id) if user.department_id else None,
+                is_head_of_department=user.is_head_of_department,
+                phone=user.phone,
+                role_id=str(user.role_id),
+                status=user.status,
+                profile_photo_url=user.profile_photo_url,
+                blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+                blacklisted_reason=user.blacklisted_reason,
+                registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+                selfie_verified=user.selfie_verified,
+                last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                created_at=user.created_at.isoformat() if user.created_at else None,
+                updated_at=user.updated_at.isoformat() if user.updated_at else None,
+                deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+                deleted_by=str(user.deleted_by) if user.deleted_by else None,
+                role_name=user.role.name if user.role else "Unknown",
+                department_name=user.department.name if user.department else None
+            )
+            user_responses.append(user_data)
+        
+        return UsersListResponse(
+            success=True,
+            message=f"Successfully retrieved {len(user_responses)} active users",
+            users=user_responses,
+            total_count=len(user_responses)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving active users: {str(e)}"
+        )
+
+@router.get("/users/by-department/{department_name}", response_model=UsersListResponse)
+async def get_users_by_department(
+    department_name: str,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get users filtered by department name.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    if not verify_admin_role(token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions to access user data"
+        )
+    
+    try:
+        # Query users by department
+        users = db.query(User).join(Role).join(Department).filter(
+            Department.name == department_name,
+            User.deleted_at.is_(None)
+        ).all()
+        
+        user_responses = []
+        for user in users:
+            user_data = UserResponse(
+                user_id=str(user.user_id),
+                employee_number=user.employee_number,
+                national_id=user.national_id,
+                first_name=user.first_name,
+                surname=user.surname,
+                other_names=user.other_names,
+                suffix=user.suffix,
+                date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+                gender=user.gender,
+                home_of_origin=user.home_of_origin,
+                traditional_authority=user.traditional_authority,
+                district=user.district,
+                current_address=user.current_address,
+                contact_number=user.contact_number,
+                email=user.email,
+                marital_status=user.marital_status,
+                spouse_name=user.spouse_name,
+                spouse_contact=user.spouse_contact,
+                date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+                designation=user.designation,
+                department_id=str(user.department_id) if user.department_id else None,
+                is_head_of_department=user.is_head_of_department,
+                phone=user.phone,
+                role_id=str(user.role_id),
+                status=user.status,
+                profile_photo_url=user.profile_photo_url,
+                blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+                blacklisted_reason=user.blacklisted_reason,
+                registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+                selfie_verified=user.selfie_verified,
+                last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                created_at=user.created_at.isoformat() if user.created_at else None,
+                updated_at=user.updated_at.isoformat() if user.updated_at else None,
+                deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+                deleted_by=str(user.deleted_by) if user.deleted_by else None,
+                role_name=user.role.name if user.role else "Unknown",
+                department_name=user.department.name if user.department else None
+            )
+            user_responses.append(user_data)
+        
+        return UsersListResponse(
+            success=True,
+            message=f"Successfully retrieved {len(user_responses)} users from {department_name} department",
+            users=user_responses,
+            total_count=len(user_responses)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving users by department: {str(e)}"
+        )

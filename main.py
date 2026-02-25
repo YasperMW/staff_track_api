@@ -1,0 +1,57 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints
+from database import engine
+from models.db_models import Base
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(
+    title="Staff Track API",
+    description="API for Staff Track Hospital Management System",
+    version="1.0.0"
+)
+
+# Configure CORS
+cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(auth_endpoints.router, prefix="/auth", tags=["auth"])
+app.include_router(file_endpoints.router, prefix="/files", tags=["files"])
+app.include_router(user_endpoints.router, prefix="/users", tags=["users"])
+app.include_router(lookup_endpoints.router, prefix="/lookup", tags=["lookup"])
+app.include_router(attendance_endpoints.router, tags=["attendance"])
+app.include_router(notifications_endpoints.router, prefix="/notifications", tags=["notifications"])
+app.include_router(requests_endpoints.router)
+
+# Mount static files for uploads
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+@app.get("/")
+async def root():
+    return {"message": "Staff Track API is running"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "version": "1.0.0"}
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "8000"))  # Changed to match Flutter config
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    uvicorn.run(app, host=host, port=port, reload=debug)
