@@ -1,15 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, desc
+from sqlalchemy import and_, func, desc, text
 from datetime import datetime, date, time, timedelta
 from typing import Optional
 import pytz
+from geoalchemy2 import functions as geofuncs
+from geoalchemy2.elements import WKTElement
 
 from models.db_models import AttendanceLog, User
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
+
+# Define timezone for consistent datetime handling
+TIMEZONE = pytz.timezone('Africa/Blantyre')  # Adjust to your timezone
+
+def get_current_time():
+    """Get current timezone-aware datetime"""
+    return datetime.now(TIMEZONE)
 
 @router.post("/check-in")
 async def check_in(
@@ -18,13 +27,25 @@ async def check_in(
     longitude: Optional[float] = None,
     accuracy: Optional[float] = None,
     device_id: Optional[str] = None,
+    shift_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Check in the current user"""
+    """Check in current user"""
+    
+    # Debug logging
+    print(f"DEBUG: Check-in request received:")
+    print(f"  location: {location}")
+    print(f"  latitude: {latitude}")
+    print(f"  longitude: {longitude}")
+    print(f"  accuracy: {accuracy}")
+    print(f"  device_id: {device_id}")
+    print(f"  shift_type: {shift_type}")
+    print(f"  user_id: {current_user.user_id}")
     
     # Check if user already checked in today (not checked out)
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    current_time = get_current_time()
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     existing_attendance = db.query(AttendanceLog).filter(
@@ -42,33 +63,77 @@ async def check_in(
             detail="Already checked in today. Please check out first."
         )
     
-    # Create location string if lat/lng provided
+    # Determine shift if not provided
+    if not shift_type:
+        check_in_hour = current_time.hour
+        check_in_minute = current_time.minute
+        
+        # Day shift: 07:30 to 16:30
+        if (check_in_hour >= 7 and check_in_hour < 16) or (check_in_hour == 7 and check_in_minute >= 30):
+            shift_type = "Day Shift"
+        # Night shift: 16:30 to 07:30 (next day)
+        else:
+            shift_type = "Night Shift"
+    
+    # Create location as PostGIS geography if lat/lng provided
+    location_geo = None
     location_str = None
     if latitude is not None and longitude is not None:
+        # Create PostGIS geography point from coordinates
+        location_geo = WKTElement(f'POINT({longitude} {latitude})', srid=4326)
         location_str = f"POINT({longitude} {latitude})"
+        print(f"DEBUG: Created location_geo from coordinates: {location_geo}")
+        print(f"DEBUG: Created location_str: {location_str}")
     elif location:
-        location_str = location
+        # Try to parse location string as coordinates
+        try:
+            if location.startswith("POINT("):
+                # Extract coordinates from POINT format
+                coords = location.replace("POINT(", "").replace(")", "").split()
+                if len(coords) == 2:
+                    lon, lat = float(coords[0]), float(coords[1])
+                    location_geo = WKTElement(f'POINT({lon} {lat})', srid=4326)
+                    location_str = location
+                    print(f"DEBUG: Parsed location string to coordinates: {location_geo}")
+        except Exception as e:
+            print(f"DEBUG: Failed to parse location string: {e}")
+            location_str = location
+    
+    print(f"DEBUG: Final location_geo: {location_geo}")
+    print(f"DEBUG: Final location_str: {location_str}")
     
     # Create attendance log
     attendance = AttendanceLog(
         user_id=current_user.user_id,
-        check_in_time=datetime.now(),
-        location=location_str,
+        check_in_time=current_time,  # Use timezone-aware datetime
+        location=location_geo,  # Use PostGIS geography object
         accuracy=accuracy,
         device_id=device_id,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+        shift_type=shift_type,
+        created_at=current_time,  # Use timezone-aware datetime
+        updated_at=current_time   # Use timezone-aware datetime
     )
+    
+    print(f"DEBUG: About to save attendance record:")
+    print(f"  attendance.location: {attendance.location}")
+    print(f"  attendance.accuracy: {attendance.accuracy}")
+    print(f"  attendance.device_id: {attendance.device_id}")
     
     db.add(attendance)
     db.commit()
     db.refresh(attendance)
     
+    print(f"DEBUG: After database commit:")
+    print(f"  saved attendance.location: {attendance.location}")
+    print(f"  saved attendance.accuracy: {attendance.accuracy}")
+    print(f"  saved attendance.device_id: {attendance.device_id}")
+    
     return {
         "message": "Check-in successful",
         "attendance_log_id": str(attendance.attendance_log_id),
         "check_in_time": attendance.check_in_time.strftime("%H:%M:%S"),
-        "location": location_str
+        "shift_type": attendance.shift_type,
+        "location": location_str  # Return string representation
     }
 
 @router.post("/check-out")
@@ -83,8 +148,18 @@ async def check_out(
 ):
     """Check out the current user"""
     
+    # Debug logging
+    print(f"DEBUG: Check-out request received:")
+    print(f"  location: {location}")
+    print(f"  latitude: {latitude}")
+    print(f"  longitude: {longitude}")
+    print(f"  accuracy: {accuracy}")
+    print(f"  device_id: {device_id}")
+    print(f"  user_id: {current_user.user_id}")
+    
     # Find today's active attendance record (checked in but not out)
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    current_time = get_current_time()
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     attendance = db.query(AttendanceLog).filter(
@@ -104,9 +179,17 @@ async def check_out(
     
     # Update location if provided
     if latitude is not None and longitude is not None:
-        attendance.location = f"POINT({longitude} {latitude})"
+        attendance.location = WKTElement(f'POINT({longitude} {latitude})', srid=4326)
     elif location:
-        attendance.location = location
+        try:
+            if location.startswith("POINT("):
+                # Extract coordinates from POINT format
+                coords = location.replace("POINT(", "").replace(")", "").split()
+                if len(coords) == 2:
+                    lon, lat = float(coords[0]), float(coords[1])
+                    attendance.location = WKTElement(f'POINT({lon} {lat})', srid=4326)
+        except:
+            pass  # Keep existing location if parsing fails
     
     if accuracy is not None:
         attendance.accuracy = accuracy
@@ -115,21 +198,50 @@ async def check_out(
         attendance.device_id = device_id
     
     # Update check out time
-    attendance.check_out_time = datetime.now()
-    attendance.updated_at = datetime.now()
+    attendance.check_out_time = current_time  # Use timezone-aware datetime
+    attendance.updated_at = current_time   # Use timezone-aware datetime
+    
+    # Determine final shift type based on check-in and check-out times
+    check_in_hour = attendance.check_in_time.hour
+    check_out_hour = attendance.check_out_time.hour
+    
+    # Day shift: 07:30 to 16:30
+    if (check_in_hour >= 7 and check_in_hour < 16) or (check_in_hour == 7 and attendance.check_in_time.minute >= 30):
+        initial_shift = "Day Shift"
+    else:
+        initial_shift = "Night Shift"
+    
+    # Check if worked across shift boundary (extended shift)
+    if (check_out_hour >= 16 and initial_shift == "Day Shift") or (check_out_hour < 7 and initial_shift == "Night Shift"):
+        attendance.shift_type = f"{initial_shift} → Extended"
+    else:
+        attendance.shift_type = initial_shift
+    
+    # Calculate and store work hours
+    work_hours = (attendance.check_out_time - attendance.check_in_time).total_seconds() / 3600.0
+    attendance.work_hours = work_hours
     
     db.commit()
     db.refresh(attendance)
     
-    # Calculate work hours
-    work_hours = (attendance.check_out_time - attendance.check_in_time).total_seconds() / 3600.0
+    # Convert PostGIS geography to string for API response
+    location_str = None
+    if attendance.location:
+        # Use ST_AsText to convert geography to WKT string
+        location_result = db.execute(
+            text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+            {"id": attendance.attendance_log_id}
+        ).first()
+        if location_result:
+            location_str = location_result[0]
     
     return {
         "message": "Check-out successful",
         "attendance_log_id": str(attendance.attendance_log_id),
         "check_out_time": attendance.check_out_time.strftime("%H:%M:%S"),
         "work_hours": round(work_hours, 2),
-        "location": attendance.location
+        "shift_type": attendance.shift_type,
+        "location": location_str
     }
 
 @router.get("/today")
@@ -138,8 +250,8 @@ async def get_today_attendance(
     current_user: User = Depends(get_current_user)
 ):
     """Get today's attendance record for the current user"""
-    
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    current_time = get_current_time()
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     attendance = db.query(AttendanceLog).filter(
@@ -158,15 +270,27 @@ async def get_today_attendance(
     if attendance.check_out_time:
         work_hours = (attendance.check_out_time - attendance.check_in_time).total_seconds() / 3600.0
     
+    # Convert PostGIS geography to string for API response
+    location_str = None
+    if attendance.location:
+        # Use ST_AsText to convert geography to WKT string
+        location_result = db.execute(
+            text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+            {"id": attendance.attendance_log_id}
+        ).first()
+        if location_result:
+            location_str = location_result[0]
+    
     return {
         "attendance_log_id": str(attendance.attendance_log_id),
         "date": attendance.check_in_time.strftime("%Y-%m-%d"),
         "check_in_time": attendance.check_in_time.strftime("%H:%M:%S"),
         "check_out_time": attendance.check_out_time.strftime("%H:%M:%S") if attendance.check_out_time else None,
-        "location": attendance.location,
+        "location": location_str,
         "work_hours": round(work_hours, 2) if work_hours else None,
         "device_id": attendance.device_id,
-        "accuracy": float(attendance.accuracy) if attendance.accuracy else None
+        "accuracy": float(attendance.accuracy) if attendance.accuracy else None,
+        "shift_type": attendance.shift_type
     }
 
 @router.get("/history")
@@ -183,7 +307,7 @@ async def get_attendance_history(
     
     if start_date:
         try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            start_dt = TIMEZONE.localize(datetime.strptime(start_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time >= start_dt)
         except ValueError:
             raise HTTPException(
@@ -193,7 +317,7 @@ async def get_attendance_history(
     
     if end_date:
         try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+            end_dt = TIMEZONE.localize(datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999))
             query = query.filter(AttendanceLog.check_in_time <= end_dt)
         except ValueError:
             raise HTTPException(
@@ -209,15 +333,27 @@ async def get_attendance_history(
         if att.check_out_time:
             work_hours = (att.check_out_time - att.check_in_time).total_seconds() / 3600.0
         
+        # Convert PostGIS geography to string for API response
+        location_str = None
+        if att.location:
+            # Use ST_AsText to convert geography to WKT string
+            location_result = db.execute(
+                text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+                {"id": att.attendance_log_id}
+            ).first()
+            if location_result:
+                location_str = location_result[0]
+        
         result.append({
             "attendance_log_id": str(att.attendance_log_id),
             "date": att.check_in_time.strftime("%Y-%m-%d"),
             "check_in_time": att.check_in_time.strftime("%H:%M:%S"),
             "check_out_time": att.check_out_time.strftime("%H:%M:%S") if att.check_out_time else None,
-            "location": att.location,
+            "location": location_str,
             "work_hours": round(work_hours, 2) if work_hours else None,
             "device_id": att.device_id,
-            "accuracy": float(att.accuracy) if att.accuracy else None
+            "accuracy": float(att.accuracy) if att.accuracy else None,
+            "shift_type": att.shift_type
         })
     
     return result
@@ -233,7 +369,7 @@ async def get_attendance_summary(
     
     if start_date:
         try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            start_dt = TIMEZONE.localize(datetime.strptime(start_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time >= start_dt)
         except ValueError:
             raise HTTPException(
@@ -243,7 +379,7 @@ async def get_attendance_summary(
     
     if end_date:
         try:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+            end_dt = TIMEZONE.localize(datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999))
             query = query.filter(AttendanceLog.check_in_time <= end_dt)
         except ValueError:
             raise HTTPException(

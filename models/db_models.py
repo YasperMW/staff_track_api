@@ -1,6 +1,7 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Numeric, Integer, Date, ForeignKey, Time
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
+from geoalchemy2 import Geography
 from database import Base
 import uuid
 
@@ -100,9 +101,11 @@ class AttendanceLog(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     check_in_time = Column(DateTime(timezone=True))
     check_out_time = Column(DateTime(timezone=True))
-    location = Column(String)  # This will store the geography as text for simplicity
+    location = Column(Geography('POINT', srid=4326))  # PostGIS geography for spatial data
     accuracy = Column(Numeric(6, 2))
     device_id = Column(String(100))
+    shift_type = Column(String(50))  # New field for shift tracking
+    work_hours = Column(Numeric(5, 2))  # Pre-calculated work hours
     offline_flag = Column(Boolean, default=False)
     sync_time = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False)
