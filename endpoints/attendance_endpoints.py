@@ -20,6 +20,89 @@ def get_current_time():
     """Get current timezone-aware datetime"""
     return datetime.now(TIMEZONE)
 
+@router.get("/my-profile-metrics")
+async def get_my_profile_metrics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Return year-to-date metrics for the current user:
+    - working_days: distinct days with a check-in
+    - on_time_rate: percentage of present days with first check-in before 09:00
+    - leave_used: total approved leave days in the year (inclusive)
+    """
+    now = get_current_time()
+    year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_year_start = year_start.replace(year=year_start.year + 1)
+
+    logs = (
+        db.query(AttendanceLog)
+        .filter(
+            AttendanceLog.user_id == current_user.user_id,
+            AttendanceLog.check_in_time >= year_start,
+            AttendanceLog.check_in_time < next_year_start,
+        )
+        .order_by(AttendanceLog.check_in_time.asc())
+        .all()
+    )
+
+    earliest_by_day = {}
+    for log in logs:
+        if not log.check_in_time:
+            continue
+        dt = log.check_in_time
+        # Normalize to configured timezone
+        if dt.tzinfo is not None:
+            dt_local = dt.astimezone(TIMEZONE)
+        else:
+            dt_local = TIMEZONE.localize(dt)
+        d = dt_local.date()
+        if d not in earliest_by_day or dt_local < earliest_by_day[d]:
+            earliest_by_day[d] = dt_local
+
+    working_days = len(earliest_by_day)
+    on_time_count = 0
+    for first_dt in earliest_by_day.values():
+        if first_dt.hour < 9:
+            on_time_count += 1
+    on_time_rate = round((on_time_count / working_days) * 100.0, 1) if working_days > 0 else 0.0
+
+    # Calculate approved leave days YTD from requests table
+    leave_used_days = 0
+    rows = db.execute(
+        text(
+            """
+            SELECT start_date, end_date
+            FROM requests
+            WHERE user_id = :user_id
+              AND status = 'approved'
+              AND deleted_at IS NULL
+              AND end_date >= :year_start
+              AND start_date < :next_year_start
+            """
+        ),
+        {
+            "user_id": current_user.user_id,
+            "year_start": year_start.date().isoformat(),
+            "next_year_start": next_year_start.date().isoformat(),
+        },
+    ).fetchall()
+
+    for row in rows:
+        start_date = row[0]
+        end_date = row[1] or row[0]
+        # Intersect with year window
+        a = max(start_date, year_start.date())
+        b = min(end_date, (next_year_start.date() - timedelta(days=1)))
+        if b >= a:
+            leave_used_days += (b - a).days + 1
+
+    return {
+        "working_days": working_days,
+        "on_time_rate": on_time_rate,
+        "leave_used": leave_used_days,
+        "year": year_start.year,
+    }
 @router.post("/check-in")
 async def check_in(
     location: Optional[str] = None,

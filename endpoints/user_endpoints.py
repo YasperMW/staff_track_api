@@ -120,6 +120,9 @@ class UsersListResponse(BaseModel):
     users: List[UserResponse]
     total_count: int
 
+class UpdateProfilePhotoRequest(BaseModel):
+    profile_photo_url: str
+
 # Helper function to get token from Bearer header
 def get_token_from_bearer(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
     if credentials and credentials.scheme == "Bearer":
@@ -382,6 +385,48 @@ async def get_complete_user_profile(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving complete user profile: {str(e)}"
+        )
+
+@router.post("/profile/update-photo")
+async def update_profile_photo(
+    request: UpdateProfilePhotoRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Update the profile photo URL of the currently authenticated user.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    email = get_email_from_token(token)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+    
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        user.profile_photo_url = request.profile_photo_url
+        user.updated_at = datetime.utcnow()
+        db.commit()
+        
+        return {"success": True, "message": "Profile photo updated successfully", "profile_photo_url": request.profile_photo_url}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating profile photo: {str(e)}"
         )
 
 @router.get("/users", response_model=UsersListResponse)

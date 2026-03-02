@@ -72,10 +72,10 @@ async def get_announcements(
             author = f"{h.creator.first_name} {h.creator.surname}"
         elif h.category == "public":
             author = "Public Holidays Service"
-        msg_parts = [f"Holiday on {h.date.isoformat()}"]
+        msg_parts = [f"📅 Observed on {h.date.strftime('%B %d, %Y')}"]
         if h.description:
             msg_parts.append(f"{h.description}")
-        holiday_message = " • ".join(msg_parts)
+        holiday_message = "\n" + " • ".join(msg_parts)
         created_at = h.created_at or datetime.combine(h.date, datetime.min.time())
         holiday_responses.append(
             AnnouncementResponse(
