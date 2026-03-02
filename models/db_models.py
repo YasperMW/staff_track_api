@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from geoalchemy2 import Geography
 from database import Base
 import uuid
+from datetime import datetime
 
 class User(Base):
     __tablename__ = "users"
@@ -145,3 +146,60 @@ class EmailVerification(Base):
     attempts = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+    
+    announcement_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=False)
+    type = Column(String(50), nullable=False)  # general, policy, urgent, event
+    target_audience = Column(String(100), nullable=False)  # All Staff, department name, etc.
+    target_department_id = Column(UUID(as_uuid=True), ForeignKey("departments.department_id"))
+    target_role_id = Column(UUID(as_uuid=True), ForeignKey("roles.role_id"))
+    is_active = Column(Boolean, default=True)
+    expires_at = Column(DateTime(timezone=True))
+    attachment_url = Column(Text)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by])
+    target_department = relationship("Department", foreign_keys=[target_department_id])
+    target_role = relationship("Role", foreign_keys=[target_role_id])
+    target_departments = relationship("AnnouncementDepartment", back_populates="announcement")
+
+class AnnouncementDepartment(Base):
+    __tablename__ = "announcement_departments"
+    
+    announcement_id = Column(UUID(as_uuid=True), ForeignKey("announcements.announcement_id"), primary_key=True)
+    department_id = Column(UUID(as_uuid=True), ForeignKey("departments.department_id"), primary_key=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    
+    # Relationships
+    announcement = relationship("Announcement", back_populates="target_departments")
+    department = relationship("Department")
+
+class Holiday(Base):
+    __tablename__ = "holidays"
+    
+    holiday_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(200), nullable=False)
+    date = Column(Date, nullable=False)
+    description = Column(Text)
+    type = Column(String(50), nullable=False)  # Public Holiday, Religious, National, Institutional
+    category = Column(String(20), nullable=False, default="institutional")  # 'public' or 'institutional'
+    source = Column(String(100))  # Source for public holidays (e.g., 'government_api', 'manual')
+    country_code = Column(String(2), default="MW")  # ISO country code for public holidays
+    is_recurring = Column(Boolean, default=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by])

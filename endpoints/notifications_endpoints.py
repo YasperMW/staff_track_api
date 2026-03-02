@@ -8,7 +8,7 @@ from database import get_db
 from models.db_models import User, Notification
 from endpoints.auth_endpoints import get_current_user
 
-router = APIRouter(prefix="/notifications", tags=["notifications"])
+router = APIRouter(tags=["notifications"])
 
 class NotificationCreate(BaseModel):
     title: str

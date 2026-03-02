@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints
 from database import engine
 from models.db_models import Base
 import os
@@ -37,6 +37,8 @@ app.include_router(lookup_endpoints.router, prefix="/lookup", tags=["lookup"])
 app.include_router(attendance_endpoints.router, tags=["attendance"])
 app.include_router(notifications_endpoints.router, prefix="/notifications", tags=["notifications"])
 app.include_router(requests_endpoints.router)
+app.include_router(announcements_endpoints.router, prefix="/api/announcements", tags=["announcements"])
+app.include_router(holidays_endpoints.router, prefix="/api/holidays", tags=["holidays"])
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -52,6 +54,6 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("API_PORT", "8000"))  # Changed to match Flutter config
+    port = int(os.getenv("API_PORT", "8888"))  # Changed to match Flutter config
     debug = os.getenv("DEBUG", "false").lower() == "true"
     uvicorn.run(app, host=host, port=port, reload=debug)
