@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from database import get_db
-from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification
+from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification, Holiday
 from endpoints.auth_endpoints import get_current_user
 
 router = APIRouter(tags=["announcements"])
@@ -41,38 +41,64 @@ async def get_announcements(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get announcements with optional filters"""
-    
-    query = db.query(Announcement).filter(Announcement.deleted_at.is_(None))
-    
-    # Apply filters
+    """Get announcements with optional filters, including holidays as announcements"""
+    ann_query = db.query(Announcement).filter(Announcement.deleted_at.is_(None))
     if activeOnly:
-        query = query.filter(Announcement.is_active == True)
-    
-    # Apply order_by before limit/offset
-    query = query.order_by(Announcement.created_at.desc())
-    
-    # Apply pagination
-    if offset:
-        query = query.offset(offset)
-    if limit:
-        query = query.limit(limit)
-    
-    announcements = query.all()
-    
-    return [
+        ann_query = ann_query.filter(Announcement.is_active == True)
+    ann_query = ann_query.order_by(Announcement.created_at.desc())
+    announcements = ann_query.all()
+
+    ann_responses: List[AnnouncementResponse] = [
         AnnouncementResponse(
-            id=str(announcement.announcement_id),
-            title=announcement.title,
-            message=announcement.message,
-            type=announcement.type,
-            targetAudience=announcement.target_audience,
-            isActive=announcement.is_active,
-            createdAt=announcement.created_at.isoformat(),
-            authorName=f"{announcement.creator.first_name} {announcement.creator.surname}"
+            id=str(a.announcement_id),
+            title=a.title,
+            message=a.message,
+            type=a.type,
+            targetAudience=a.target_audience,
+            isActive=a.is_active,
+            createdAt=a.created_at.isoformat(),
+            authorName=f"{a.creator.first_name} {a.creator.surname}" if a.creator else "System"
         )
-        for announcement in announcements
+        for a in announcements
     ]
+
+    hol_query = db.query(Holiday).filter(Holiday.deleted_at.is_(None))
+    holidays = hol_query.all()
+
+    holiday_responses: List[AnnouncementResponse] = []
+    for h in holidays:
+        author = "System"
+        if h.category == "institutional" and h.creator:
+            author = f"{h.creator.first_name} {h.creator.surname}"
+        elif h.category == "public":
+            author = "Public Holidays Service"
+        msg_parts = [f"Holiday on {h.date.isoformat()}"]
+        if h.description:
+            msg_parts.append(f"{h.description}")
+        holiday_message = " • ".join(msg_parts)
+        created_at = h.created_at or datetime.combine(h.date, datetime.min.time())
+        holiday_responses.append(
+            AnnouncementResponse(
+                id=str(h.holiday_id),
+                title=h.name,
+                message=holiday_message,
+                type="holiday",
+                targetAudience="All Staff",
+                isActive=True,
+                createdAt=created_at.isoformat(),
+                authorName=author,
+            )
+        )
+
+    combined = ann_responses + holiday_responses
+    combined.sort(key=lambda x: x.createdAt, reverse=True)
+
+    if offset:
+        combined = combined[offset:]
+    if limit:
+        combined = combined[:limit]
+
+    return combined
 
 @router.post("/", response_model=AnnouncementResponse)
 async def create_announcement(
