@@ -50,6 +50,7 @@ class User(Base):
     role = relationship("Role", back_populates="users", foreign_keys=[role_id])
     department = relationship("Department", back_populates="users", foreign_keys=[department_id])
     designation = relationship("Designation", back_populates="users", foreign_keys=[designation_id])
+    fcm_tokens = relationship("UserFCMToken", back_populates="user", cascade="all, delete-orphan")
 
 class Designation(Base):
     __tablename__ = "designations"
@@ -133,6 +134,19 @@ class Notification(Base):
     
     # Relationships
     user = relationship("User", foreign_keys=[user_id])
+
+class UserFCMToken(Base):
+    __tablename__ = "user_fcm_tokens"
+    
+    token_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    fcm_token = Column(Text, nullable=False, unique=True)
+    device_id = Column(String(100))
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    
+    # Relationships
+    user = relationship("User", back_populates="fcm_tokens", foreign_keys=[user_id])
 
 class EmailVerification(Base):
     __tablename__ = "email_verifications"

@@ -1,12 +1,14 @@
 from datetime import datetime
+import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from database import get_db
-from models.db_models import User, Notification
+from models.db_models import User, Notification, UserFCMToken
 from endpoints.auth_endpoints import get_current_user
+from fcm_service import send_push_notification
 
 router = APIRouter(tags=["notifications"])
 
@@ -24,6 +26,45 @@ class NotificationResponse(BaseModel):
     is_read: bool
     created_at: str
     updated_at: str
+
+class TokenRegistration(BaseModel):
+    fcm_token: str
+    device_id: Optional[str] = None
+
+@router.post("/register-token", response_model=dict)
+async def register_fcm_token(
+    registration: TokenRegistration,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Register or update an FCM token for the current user"""
+    
+    # Check if token already exists for this user
+    existing_token = db.query(UserFCMToken).filter(
+        UserFCMToken.fcm_token == registration.fcm_token
+    ).first()
+    
+    if existing_token:
+        if existing_token.user_id != current_user.user_id:
+            # Token transferred to another user
+            existing_token.user_id = current_user.user_id
+            existing_token.updated_at = datetime.now()
+        else:
+            # Token already belongs to this user, just update timestamp
+            existing_token.updated_at = datetime.now()
+    else:
+        # Create new token record
+        new_token = UserFCMToken(
+            user_id=current_user.user_id,
+            fcm_token=registration.fcm_token,
+            device_id=registration.device_id,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        db.add(new_token)
+    
+    db.commit()
+    return {"message": "FCM token registered successfully"}
 
 @router.get("/", response_model=List[NotificationResponse])
 async def get_notifications(
@@ -82,6 +123,20 @@ async def create_notification(
     db.add(new_notification)
     db.commit()
     db.refresh(new_notification)
+    
+    # Send push notification via FCM
+    recipient_user = db.query(User).filter(User.user_id == recipient_id).first()
+    if recipient_user and recipient_user.fcm_tokens:
+        for fcm_token_record in recipient_user.fcm_tokens:
+            await send_push_notification(
+                token=fcm_token_record.fcm_token,
+                title=notification.title,
+                body=notification.message,
+                data={
+                    "notification_id": str(new_notification.notification_id),
+                    "type": notification.type
+                }
+            )
     
     return NotificationResponse(
         id=str(new_notification.notification_id),

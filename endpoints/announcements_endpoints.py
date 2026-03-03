@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from database import get_db
-from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification, Holiday
+from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification, Holiday, UserFCMToken
 from endpoints.auth_endpoints import get_current_user
+from fcm_service import send_push_notification
 
 router = APIRouter(tags=["announcements"])
 
@@ -219,6 +220,20 @@ async def _send_announcement_notifications(
         if notifications_to_create:
             db.bulk_save_objects(notifications_to_create)
             db.commit()
+            
+            # Send FCM push notifications to users with registered tokens
+            for user in users:
+                if user.fcm_tokens:
+                    for token_record in user.fcm_tokens:
+                        await send_push_notification(
+                            token=token_record.fcm_token,
+                            title=f"📢 {announcement.type.title()}: {announcement.title}",
+                            body=announcement.message,
+                            data={
+                                "announcement_id": str(announcement.announcement_id),
+                                "type": "announcement"
+                            }
+                        )
             
     except Exception as e:
         # Log error but don't fail the announcement creation
