@@ -217,3 +217,43 @@ class Holiday(Base):
     
     # Relationships
     creator = relationship("User", foreign_keys=[created_by])
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    audit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    action = Column(String(100), nullable=False)
+    entity = Column(String(100))
+    details = Column(JSONB)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+
+class RequestApproval(Base):
+    __tablename__ = "request_approvals"
+    approval_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("requests.request_id"), nullable=False)
+    approver_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    level = Column(Integer, default=1)
+    action = Column(String(20), nullable=False)
+    comment = Column(Text)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+
+class LeaveBalance(Base):
+    __tablename__ = "leave_balances"
+    balance_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    leave_type = Column(String(50), nullable=False)
+    allocated_days = Column(Integer, default=0)
+    used_days = Column(Integer, default=0)
+    bonus_days = Column(Integer, default=0)
+    remaining_days = Column(Integer, default=0)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    user = relationship("User", foreign_keys=[user_id])
+
+class EmployeeFile(Base):
+    __tablename__ = "employee_files"
+    file_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    file_type = Column(String(50), nullable=False)
+    file_url = Column(Text, nullable=False)
+    upload_date = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    user = relationship("User", foreign_keys=[user_id])

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints
 from database import engine
 from models.db_models import Base
 import os
@@ -39,6 +39,34 @@ app.include_router(notifications_endpoints.router, prefix="/notifications", tags
 app.include_router(requests_endpoints.router)
 app.include_router(announcements_endpoints.router, prefix="/api/announcements", tags=["announcements"])
 app.include_router(holidays_endpoints.router, prefix="/api/holidays", tags=["holidays"])
+app.include_router(leave_endpoints.router, prefix="/api", tags=["leave"])
+app.include_router(leave_policy_endpoints.router, tags=["leave"])
+
+import asyncio
+from datetime import datetime
+from fastapi import BackgroundTasks
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from endpoints.holidays_endpoints import fetch_public_holidays
+
+HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
+HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
+
+async def _holidays_sync_loop():
+    while True:
+        try:
+            year = datetime.now().year
+            with SessionLocal() as db:
+                # Run fetch; de-dup handled inside
+                await fetch_public_holidays(year=year, country_code=HOLIDAYS_SYNC_COUNTRY, db=db)  # type: ignore
+        except Exception:
+            pass
+        await asyncio.sleep(24 * 60 * 60)
+
+@app.on_event("startup")
+async def _startup():
+    if HOLIDAYS_SYNC_ENABLED:
+        asyncio.create_task(_holidays_sync_loop())
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

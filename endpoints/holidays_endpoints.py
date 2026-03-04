@@ -6,6 +6,7 @@ from sqlalchemy import func
 from pydantic import BaseModel
 import requests
 import json
+import os
 
 from database import get_db
 from models.db_models import User, Holiday
@@ -150,74 +151,112 @@ async def create_holiday(
 @router.post("/fetch-public", response_model=List[HolidayResponse])
 async def fetch_public_holidays(
     year: int,
-    country_code: str = "MW",  # Default to Malawi
+    country_code: str = "MW",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Fetch public holidays from external API and store them"""
-    
+    provider = os.getenv("HOLIDAYS_API_PROVIDER", "calendarific").lower()
+    api_key = os.getenv("HOLIDAYS_API_KEY", "")
     try:
-        # Using a free public holidays API (you may need to sign up for an API key)
-        # For demonstration, we'll use a mock implementation
-        # In production, you'd use a real API like calendarific.com or similar
-        
-        # Mock data for Malawi public holidays (replace with real API call)
-        mock_holidays = [
-            {"name": "New Year's Day", "date": f"{year}-01-01", "type": "National Holiday"},
-            {"name": "John Chilembwe Day", "date": f"{year}-01-15", "type": "National Holiday"},
-            {"name": "Martyrs' Day", "date": f"{year}-03-03", "type": "National Holiday"},
-            {"name": "Good Friday", "date": f"{year}-04-07", "type": "Religious Holiday"},
-            {"name": "Easter Monday", "date": f"{year}-04-10", "type": "Religious Holiday"},
-            {"name": "Labour Day", "date": f"{year}-05-01", "type": "National Holiday"},
-            {"name": "Kamuzu Day", "date": f"{year}-05-14", "type": "National Holiday"},
-            {"name": "Independence Day", "date": f"{year}-07-06", "type": "National Holiday"},
-            {"name": "Mother's Day", "date": f"{year}-10-15", "type": "National Holiday"},
-            {"name": "Christmas Day", "date": f"{year}-12-25", "type": "Religious Holiday"},
-            {"name": "Boxing Day", "date": f"{year}-12-26", "type": "National Holiday"},
-        ]
-        
-        stored_holidays = []
-        
-        for holiday_data in mock_holidays:
-            # Check if holiday already exists
-            existing = db.query(Holiday).filter(
-                Holiday.deleted_at.is_(None),
-                Holiday.name == holiday_data["name"],
-                Holiday.date == datetime.strptime(holiday_data["date"], "%Y-%m-%d").date(),
-                Holiday.category == "public"
-            ).first()
-            
-            if not existing:
-                new_holiday = Holiday(
-                    name=holiday_data["name"],
-                    date=datetime.strptime(holiday_data["date"], "%Y-%m-%d").date(),
-                    description=f"Public holiday in {country_code}",
-                    type=holiday_data["type"],
-                    category="public",
-                    source="government_api",
-                    country_code=country_code,
-                    is_recurring=True,  # Most public holidays are recurring
-                    created_at=datetime.now(),
-                    updated_at=datetime.now()
-                )
-                
-                db.add(new_holiday)
-                db.commit()
-                db.refresh(new_holiday)
-                
-                stored_holidays.append(HolidayResponse(
-                    id=str(new_holiday.holiday_id),
-                    name=new_holiday.name,
-                    date=new_holiday.date.isoformat(),
-                    description=new_holiday.description,
-                    type=new_holiday.type,
-                    category=new_holiday.category,
-                    source=new_holiday.source,
-                    isRecurring=new_holiday.is_recurring
-                ))
-        
+        stored_holidays: List[HolidayResponse] = []
+        if provider == "calendarific" and api_key:
+            url = "https://calendarific.com/api/v2/holidays"
+            params = {"api_key": api_key, "country": country_code, "year": year}
+            resp = requests.get(url, params=params, timeout=15)
+            if resp.status_code != 200:
+                raise Exception(f"Calendarific error {resp.status_code}")
+            data = resp.json()
+            items = data.get("response", {}).get("holidays", []) or []
+            for h in items:
+                name = h.get("name") or ""
+                date_str = (h.get("date", {}).get("iso") or "")[:10]
+                htypes = h.get("type") or []
+                htype = (htypes[0] if isinstance(htypes, list) and htypes else "National").lower()
+                type_map = {"national": "national", "religious": "religious"}
+                type_val = type_map.get(htype, "custom")
+                if not name or not date_str:
+                    continue
+                existing = db.query(Holiday).filter(
+                    Holiday.deleted_at.is_(None),
+                    Holiday.name == name,
+                    Holiday.date == datetime.strptime(date_str, "%Y-%m-%d").date(),
+                    Holiday.category == "public"
+                ).first()
+                if not existing:
+                    new_holiday = Holiday(
+                        name=name,
+                        date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                        description=f"Public holiday in {country_code}",
+                        type=type_val,
+                        category="public",
+                        source="calendarific",
+                        country_code=country_code,
+                        is_recurring=True,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    db.add(new_holiday)
+                    db.commit()
+                    db.refresh(new_holiday)
+                    stored_holidays.append(HolidayResponse(
+                        id=str(new_holiday.holiday_id),
+                        name=new_holiday.name,
+                        date=new_holiday.date.isoformat(),
+                        description=new_holiday.description,
+                        type=new_holiday.type,
+                        category=new_holiday.category,
+                        source=new_holiday.source,
+                        isRecurring=new_holiday.is_recurring
+                    ))
+        else:
+            url = f"https://date.nager.at/api/v3/publicholidays/{year}/{country_code}"
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                raise Exception(f"Nager error {resp.status_code}")
+            items = resp.json()
+            for h in items:
+                name = h.get("localName") or h.get("name") or ""
+                date_str = h.get("date") or ""
+                types = h.get("types") or []
+                t0 = types[0] if isinstance(types, list) and types else "Public"
+                t0 = t0.lower()
+                type_map = {"public": "national", "religion": "religious"}
+                type_val = type_map.get(t0, "custom")
+                if not name or not date_str:
+                    continue
+                existing = db.query(Holiday).filter(
+                    Holiday.deleted_at.is_(None),
+                    Holiday.name == name,
+                    Holiday.date == datetime.strptime(date_str, "%Y-%m-%d").date(),
+                    Holiday.category == "public"
+                ).first()
+                if not existing:
+                    new_holiday = Holiday(
+                        name=name,
+                        date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                        description=f"Public holiday in {country_code}",
+                        type=type_val,
+                        category="public",
+                        source="nager",
+                        country_code=country_code,
+                        is_recurring=True,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    db.add(new_holiday)
+                    db.commit()
+                    db.refresh(new_holiday)
+                    stored_holidays.append(HolidayResponse(
+                        id=str(new_holiday.holiday_id),
+                        name=new_holiday.name,
+                        date=new_holiday.date.isoformat(),
+                        description=new_holiday.description,
+                        type=new_holiday.type,
+                        category=new_holiday.category,
+                        source=new_holiday.source,
+                        isRecurring=new_holiday.is_recurring
+                    ))
         return stored_holidays
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch public holidays: {str(e)}")
 

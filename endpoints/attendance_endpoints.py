@@ -7,9 +7,11 @@ import pytz
 from geoalchemy2 import functions as geofuncs
 from geoalchemy2.elements import WKTElement
 
-from models.db_models import AttendanceLog, User
+from models.db_models import AttendanceLog, User, AuditLog
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
+import os
+import math
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -162,6 +164,24 @@ async def check_in(
     location_geo = None
     location_str = None
     if latitude is not None and longitude is not None:
+        center_lat = os.getenv("GEOFENCE_CENTER_LAT")
+        center_lon = os.getenv("GEOFENCE_CENTER_LON")
+        radius_m = os.getenv("GEOFENCE_RADIUS_METERS")
+        if center_lat and center_lon and radius_m:
+            try:
+                clat = float(center_lat)
+                clon = float(center_lon)
+                rad = float(radius_m)
+                r = 6371000.0
+                dlat = math.radians(latitude - clat)
+                dlon = math.radians(longitude - clon)
+                a = math.sin(dlat/2)**2 + math.cos(math.radians(clat))*math.cos(math.radians(latitude))*math.sin(dlon/2)**2
+                c = 2*math.atan2(math.sqrt(a), math.sqrt(1-a))
+                dist = r*c
+                if dist > rad:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Outside allowed work area")
+            except Exception:
+                pass
         # Create PostGIS geography point from coordinates
         location_geo = WKTElement(f'POINT({longitude} {latitude})', srid=4326)
         location_str = f"POINT({longitude} {latitude})"
@@ -205,6 +225,8 @@ async def check_in(
     db.add(attendance)
     db.commit()
     db.refresh(attendance)
+    db.add(AuditLog(actor_id=current_user.user_id, action="check_in", entity="attendance", details={"attendance_log_id": str(attendance.attendance_log_id)}))
+    db.commit()
     
     print(f"DEBUG: After database commit:")
     print(f"  saved attendance.location: {attendance.location}")
@@ -306,6 +328,8 @@ async def check_out(
     
     db.commit()
     db.refresh(attendance)
+    db.add(AuditLog(actor_id=current_user.user_id, action="check_out", entity="attendance", details={"attendance_log_id": str(attendance.attendance_log_id), "work_hours": float(work_hours)}))
+    db.commit()
     
     # Convert PostGIS geography to string for API response
     location_str = None

@@ -6,7 +6,8 @@ from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
-from models.db_models import User
+from models.db_models import User, RequestApproval, Notification, LeaveBalance, Role
+from fcm_service import send_push_notification
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -77,6 +78,27 @@ async def create_request(
         )
 
     now = datetime.utcnow()
+    # Determine initial approver: HOD -> HR Admin -> Accountant -> Principal Hospital Administrator
+    approver_id = None
+    hod = db.query(User).filter(
+        User.department_id == current_user.department_id,
+        User.is_head_of_department == True,
+        User.deleted_at.is_(None)
+    ).first()
+    if hod:
+        approver_id = hod.user_id
+    else:
+        hr = db.query(User).join(Role).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
+        if hr:
+            approver_id = hr.user_id
+        else:
+            accountant = db.query(User).join(Role).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
+            if accountant:
+                approver_id = accountant.user_id
+            else:
+                principal = db.query(User).join(Role).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+                if principal:
+                    approver_id = principal.user_id
 
     result = db.execute(
         text(
@@ -100,7 +122,7 @@ async def create_request(
                 :start_date,
                 :end_date,
                 'pending',
-                NULL,
+                :current_approver_id,
                 :created_at,
                 :updated_at,
                 NULL
@@ -113,6 +135,7 @@ async def create_request(
             "type": payload.type,
             "start_date": start_date,
             "end_date": end_date,
+            "current_approver_id": approver_id,
             "created_at": now,
             "updated_at": now,
         },
@@ -241,6 +264,13 @@ async def get_all_pending_requests_debug(
 
 @router.get("/admin/pending-list")
 async def get_admin_pending_requests_list(
+    status_filter: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    department_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -252,9 +282,21 @@ async def get_admin_pending_requests_list(
     # For non-admins, show only their assigned requests
     is_admin = current_user.role.name.lower() in ['admin', 'administrator', 'hr', 'system admin']
     
+    where_clauses = ["r.deleted_at IS NULL"]
+    params = {}
     if is_admin:
-        # Admins can see all pending requests
-        query = """
+        if status_filter and status_filter.lower() in ["pending", "approved", "denied"]:
+            where_clauses.append("r.status = :status")
+            params["status"] = status_filter.lower()
+        else:
+            where_clauses.append("r.status = 'pending'")
+        if type_filter:
+            where_clauses.append("LOWER(r.type) LIKE :type")
+            params["type"] = f"%{type_filter.lower()}%"
+        if department_id:
+            where_clauses.append("u.department_id = :dept")
+            params["dept"] = department_id
+        query = f"""
             SELECT 
                 r.request_id,
                 r.type,
@@ -266,14 +308,24 @@ async def get_admin_pending_requests_list(
                 u.user_id
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
-            WHERE r.status = 'pending'
-              AND r.deleted_at IS NULL
+            WHERE {' AND '.join(where_clauses)}
             ORDER BY r.created_at DESC
-            """
-        params = {}
+        """
     else:
-        # Non-admins only see their assigned requests
-        query = """
+        where_clauses.append("(r.current_approver_id IS NULL OR r.current_approver_id = :approver_id)")
+        params["approver_id"] = current_user.user_id
+        if status_filter and status_filter.lower() in ["pending", "approved", "denied"]:
+            where_clauses.append("r.status = :status")
+            params["status"] = status_filter.lower()
+        else:
+            where_clauses.append("r.status = 'pending'")
+        if type_filter:
+            where_clauses.append("LOWER(r.type) LIKE :type")
+            params["type"] = f"%{type_filter.lower()}%"
+        if department_id:
+            where_clauses.append("u.department_id = :dept")
+            params["dept"] = department_id
+        query = f"""
             SELECT 
                 r.request_id,
                 r.type,
@@ -285,13 +337,17 @@ async def get_admin_pending_requests_list(
                 u.user_id
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
-            WHERE r.status = 'pending'
-              AND r.deleted_at IS NULL
-              AND (r.current_approver_id IS NULL OR r.current_approver_id = :approver_id)
+            WHERE {' AND '.join(where_clauses)}
             ORDER BY r.created_at DESC
-            """
-        params = {"approver_id": current_user.user_id}
+        """
 
+    sort_map = {"created_at": "r.created_at", "start_date": "r.start_date", "end_date": "r.end_date"}
+    sort_col = sort_map.get((sort_by or "created_at").lower(), "r.created_at")
+    sort_dir = "ASC" if (sort_order or "desc").lower() == "asc" else "DESC"
+    limit = max(1, min(page_size, 200))
+    offset = max(0, (max(1, page) - 1) * limit)
+    query = f"{query} ORDER BY {sort_col} {sort_dir} LIMIT :limit OFFSET :offset"
+    params.update({"limit": limit, "offset": offset})
     result = db.execute(text(query), params).fetchall()
     print(f"Found {len(result)} pending requests for admin {current_user.user_id} (is_admin: {is_admin})")
 
@@ -333,22 +389,70 @@ async def approve_request(
     request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    comment: Optional[str] = None,
 ):
-    result = db.execute(
-        text(
-            """
-            UPDATE requests
-            SET status = 'approved',
-                updated_at = NOW()
-            WHERE request_id = :request_id
-              AND status = 'pending'
-              AND deleted_at IS NULL
-              AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
-            RETURNING request_id
-            """
-        ),
-        {"request_id": request_id, "approver_id": current_user.user_id},
-    ).fetchone()
+    req_row = db.execute(text("SELECT user_id, current_approver_id, type, start_date, end_date FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
+    if not req_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+    if req_row[1] and str(req_row[1]) != str(current_user.user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
+    # Determine next approver in chain
+    user_id = req_row[0]
+    rtype = req_row[2]
+    sd = req_row[3]
+    ed = req_row[4] or req_row[3]
+    next_approver_id = None
+    # Chain: HOD -> HR Admin -> Accountant -> Principal Hospital Administrator
+    # Identify current user's position and pick next by role
+    # Simple role-based ordering
+    role_name = current_user.role.name if current_user.role else ""
+    if role_name and role_name.lower() in ["head of department", "hod"]:
+        hr = db.query(User).join(Role).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
+        next_approver_id = hr.user_id if hr else None
+    elif role_name and role_name.lower() in ["hr admin", "hr"]:
+        accountant = db.query(User).join(Role).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
+        next_approver_id = accountant.user_id if accountant else None
+    elif role_name and role_name.lower() == "accountant":
+        principal = db.query(User).join(Role).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+        next_approver_id = principal.user_id if principal else None
+    else:
+        # If initial approver wasn't set or current approver is not in chain, start from HOD
+        hod = db.query(User).filter(User.department_id == current_user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
+        next_approver_id = hod.user_id if hod and hod.user_id != current_user.user_id else None
+    result = None
+    if next_approver_id:
+        result = db.execute(
+            text(
+                """
+                UPDATE requests
+                SET current_approver_id = :next_id,
+                    updated_at = NOW()
+                WHERE request_id = :request_id
+                  AND status = 'pending'
+                  AND deleted_at IS NULL
+                  AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
+                RETURNING request_id
+                """
+            ),
+            {"request_id": request_id, "approver_id": current_user.user_id, "next_id": next_approver_id},
+        ).fetchone()
+    else:
+        result = db.execute(
+            text(
+                """
+                UPDATE requests
+                SET status = 'approved',
+                    current_approver_id = NULL,
+                    updated_at = NOW()
+                WHERE request_id = :request_id
+                  AND status = 'pending'
+                  AND deleted_at IS NULL
+                  AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
+                RETURNING request_id
+                """
+            ),
+            {"request_id": request_id, "approver_id": current_user.user_id},
+        ).fetchone()
 
     if not result:
         raise HTTPException(
@@ -357,6 +461,74 @@ async def approve_request(
         )
 
     db.commit()
+    # Notify initial approver
+    if approver_id:
+        db.add(Notification(
+            user_id=approver_id,
+            title="New Request Pending",
+            message=f"{payload.type} requires your approval",
+            type="request",
+            is_read=False,
+            created_at=now,
+            updated_at=now
+        ))
+        db.commit()
+        approver_user = db.query(User).filter(User.user_id == approver_id).first()
+        if approver_user and approver_user.fcm_tokens:
+            for tok in approver_user.fcm_tokens:
+                try:
+                    await send_push_notification(
+                        token=tok.fcm_token,
+                        title="New Request Pending",
+                        body=f"{payload.type} requires your approval",
+                        data={"request_id": str(result[0]), "type": "request"}
+                    )
+                except Exception:
+                    pass
+    db.add(RequestApproval(request_id=result[0], approver_id=current_user.user_id, level=1, action="approved", comment=comment, timestamp=datetime.utcnow()))
+    db.commit()
+    # Notify next approver or finalize
+    if next_approver_id:
+        db.add(Notification(
+            user_id=next_approver_id,
+            title="Request Pending Approval",
+            message=f"{rtype} requires your approval",
+            type="request",
+            is_read=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        ))
+        db.commit()
+        next_user = db.query(User).filter(User.user_id == next_approver_id).first()
+        if next_user and next_user.fcm_tokens:
+            for tok in next_user.fcm_tokens:
+                try:
+                    await send_push_notification(token=tok.fcm_token, title="Request Pending Approval", body=f"{rtype} requires your approval", data={"request_id": request_id, "type": "request"})
+                except Exception:
+                    pass
+    else:
+        duration = (ed - sd).days + 1
+        if rtype in ["annual_leave", "compassionate_leave", "maternity", "paternity", "unpaid_leave"]:
+            lb = db.query(LeaveBalance).filter(LeaveBalance.user_id == user_id, LeaveBalance.leave_type == rtype).first()
+            if not lb:
+                lb = LeaveBalance(user_id=user_id, leave_type=rtype, allocated_days=0, bonus_days=0, used_days=0, remaining_days=0)
+                db.add(lb)
+                db.commit()
+                db.refresh(lb)
+            lb.used_days = (lb.used_days or 0) + duration
+            total = (lb.allocated_days or 0) + (lb.bonus_days or 0)
+            lb.remaining_days = max(total - (lb.used_days or 0), 0)
+            lb.updated_at = datetime.utcnow()
+            db.commit()
+        db.add(Notification(user_id=user_id, title="Request Approved", message=f"{rtype} approved for {duration} day(s)", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow()))
+        db.commit()
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if user and user.fcm_tokens:
+            for tok in user.fcm_tokens:
+                try:
+                    await send_push_notification(token=tok.fcm_token, title="Request Approved", body=f"{rtype} approved for {duration} day(s)", data={"request_id": request_id, "type": "request"})
+                except Exception:
+                    pass
 
     return {"success": True}
 
@@ -516,6 +688,7 @@ async def deny_request(
     request_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    comment: Optional[str] = None,
 ):
     result = db.execute(
         text(
@@ -540,5 +713,30 @@ async def deny_request(
         )
 
     db.commit()
+    db.add(RequestApproval(request_id=result[0], approver_id=current_user.user_id, level=1, action="denied", comment=comment, timestamp=datetime.utcnow()))
+    db.commit()
+    req = db.execute(text("SELECT user_id, type FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
+    if req:
+        uid = req[0]
+        rtype = req[1]
+        n = Notification(user_id=uid, title="Request Denied", message=f"{rtype} denied", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+        db.add(n)
+        db.commit()
+        user = db.query(User).filter(User.user_id == uid).first()
+        if user and user.fcm_tokens:
+            for tok in user.fcm_tokens:
+                try:
+                    await send_push_notification(token=tok.fcm_token, title="Request Denied", body=f"{rtype} denied", data={"request_id": request_id, "type": "request"})
+                except Exception:
+                    pass
+
+@router.get("/{request_id}/approvals")
+async def get_request_approvals(
+    request_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = db.query(RequestApproval).filter(RequestApproval.request_id == request_id).order_by(RequestApproval.timestamp.asc()).all()
+    return [{"approval_id": str(r.approval_id), "approver_id": str(r.approver_id), "level": r.level, "action": r.action, "comment": r.comment, "timestamp": r.timestamp.isoformat() if r.timestamp else None} for r in rows]
 
     return {"success": True}

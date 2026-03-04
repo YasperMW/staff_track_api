@@ -38,16 +38,16 @@ python main.py
 
 Or using uvicorn directly:
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 3000 --reload
+uvicorn main:app --host 0.0.0.0 --port 8888 --reload
 ```
 
-2. The API will be available at: `http://localhost:3000`
+2. The API will be available at: `http://localhost:8888`
 
 ### API Documentation
 
 Once the server is running, you can access:
-- Swagger UI: `http://localhost:3000/docs`
-- ReDoc: `http://localhost:3000/redoc`
+- Swagger UI: `http://localhost:8888/docs`
+- ReDoc: `http://localhost:8888/redoc`
 
 ### Available Endpoints
 
@@ -69,7 +69,7 @@ For testing purposes, the following demo credentials are available:
 ### Configuration
 
 The API is configured to:
-- Run on port 3000
+- Run on port 8888
 - Accept CORS requests from any origin (for development)
 - Use JWT tokens for authentication
 - Store data in memory (for demo purposes)
@@ -97,7 +97,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
 # API Configuration
 API_HOST=0.0.0.0
-API_PORT=3000
+API_PORT=8888
 DEBUG=true
 
 # CORS Configuration
