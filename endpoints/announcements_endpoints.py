@@ -8,6 +8,7 @@ from database import get_db
 from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification, Holiday, UserFCMToken
 from endpoints.auth_endpoints import get_current_user
 from fcm_service import send_push_notification
+from mail_service import email_service
 
 router = APIRouter(tags=["announcements"])
 
@@ -163,7 +164,8 @@ async def create_announcement(
             db, 
             new_announcement, 
             announcement.target_departments, 
-            announcement.target_role
+            announcement.target_role,
+            f"{current_user.first_name} {current_user.surname}"
         )
     
     return AnnouncementResponse(
@@ -181,7 +183,8 @@ async def _send_announcement_notifications(
     db: Session, 
     announcement: Announcement, 
     target_departments: List[str], 
-    target_role: Optional[str]
+    target_role: Optional[str],
+    creator_name: str = None
 ):
     """Send notifications to users in target departments"""
     
@@ -221,8 +224,9 @@ async def _send_announcement_notifications(
             db.bulk_save_objects(notifications_to_create)
             db.commit()
             
-            # Send FCM push notifications to users with registered tokens
+            # Send FCM push notifications and emails to users
             for user in users:
+                # Send push notifications
                 if user.fcm_tokens:
                     for token_record in user.fcm_tokens:
                         await send_push_notification(
@@ -234,6 +238,22 @@ async def _send_announcement_notifications(
                                 "type": "announcement"
                             }
                         )
+                
+                # Send email notifications for urgent and policy announcements
+                if (announcement.type.lower() in ["urgent", "policy"] and 
+                    user.email and creator_name):
+                    try:
+                        await email_service.send_announcement_email(
+                            email=user.email,
+                            recipient_name=f"{user.first_name} {user.surname}",
+                            announcement_title=announcement.title,
+                            announcement_message=announcement.message,
+                            announcement_type=announcement.type,
+                            target_audience=announcement.target_audience,
+                            author_name=creator_name
+                        )
+                    except Exception as e:
+                        print(f"Failed to send announcement email to {user.email}: {e}")
             
     except Exception as e:
         # Log error but don't fail the announcement creation

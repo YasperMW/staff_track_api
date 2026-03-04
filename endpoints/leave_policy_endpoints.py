@@ -4,8 +4,10 @@ from pydantic import BaseModel
 from typing import List, Optional
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
-from models.db_models import User, Role, Department, LeaveBalance
+from models.db_models import User, Role, Department, LeaveBalance, Notification
 from datetime import datetime
+from fcm_service import send_push_notification
+from mail_service import email_service
 
 router = APIRouter(prefix="/api/leave/policies", tags=["leave"])
 
@@ -66,7 +68,9 @@ async def apply_policy(
             raise HTTPException(status_code=404, detail="Department not found")
         query = query.filter(User.department_id == dept.department_id)
     users = query.all()
-    # Apply to balances
+    
+    # Apply to balances and send notifications
+    notifications_to_create = []
     for u in users:
         lb = db.query(LeaveBalance).filter(LeaveBalance.user_id == u.user_id, LeaveBalance.leave_type == payload.leave_type).first()
         if not lb:
@@ -87,5 +91,57 @@ async def apply_policy(
             used = lb.used_days or 0
             lb.remaining_days = max(total - used, 0)
             lb.updated_at = datetime.utcnow()
+        
+        # Create notification record
+        notification = Notification(
+            user_id=u.user_id,
+            title="Leave Policy Updated",
+            message=f"Your {payload.leave_type.replace('_', ' ').title()} leave policy has been updated to {payload.allocated_days + payload.bonus_days} days",
+            type="policy",
+            is_read=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        notifications_to_create.append(notification)
+        
+        # Send email notification
+        if u.email:
+            try:
+                await email_service.send_leave_policy_applied_email(
+                    email=u.email,
+                    employee_name=f"{u.first_name} {u.surname}",
+                    leave_type=payload.leave_type,
+                    allocated_days=payload.allocated_days,
+                    bonus_days=payload.bonus_days,
+                    total_available=payload.allocated_days + payload.bonus_days,
+                    applied_by=f"{current_user.first_name} {current_user.surname}",
+                    target_role=payload.role_name,
+                    target_department=payload.department_name
+                )
+            except Exception as e:
+                print(f"Failed to send leave policy email to {u.email}: {e}")
+        
+        # Send push notification if user has FCM token
+        if hasattr(u, 'fcm_token') and u.fcm_token:
+            try:
+                await send_push_notification(
+                    token=u.fcm_token,
+                    title="Leave Policy Updated",
+                    message=f"Your {payload.leave_type.replace('_', ' ').title()} leave entitlement has been updated",
+                    data={
+                        "type": "leave_policy_update",
+                        "leave_type": payload.leave_type,
+                        "allocated_days": payload.allocated_days,
+                        "bonus_days": payload.bonus_days
+                    }
+                )
+            except Exception as e:
+                print(f"Failed to send leave policy push notification: {e}")
+    
+    # Bulk insert notifications
+    if notifications_to_create:
+        db.bulk_save_objects(notifications_to_create)
+        db.commit()
+    
     db.commit()
     return {"success": True, "affected_users": len(users)}

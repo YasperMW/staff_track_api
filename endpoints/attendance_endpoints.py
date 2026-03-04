@@ -1,17 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func, desc, text
+from sqlalchemy import text, func, and_
 from datetime import datetime, date, time, timedelta
 from typing import Optional
-import pytz
-from geoalchemy2 import functions as geofuncs
-from geoalchemy2.elements import WKTElement
-
-from models.db_models import AttendanceLog, User, AuditLog
-from database import get_db
-from endpoints.auth_endpoints import get_current_user
+from pydantic import BaseModel
 import os
 import math
+import pytz
+from geoalchemy2 import WKTElement
+from database import get_db
+from endpoints.auth_endpoints import get_current_user
+from models.db_models import User, AttendanceLog, Notification, Role
+from fcm_service import send_push_notification
+from mail_service import email_service
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -179,6 +180,69 @@ async def check_in(
                 c = 2*math.atan2(math.sqrt(a), math.sqrt(1-a))
                 dist = r*c
                 if dist > rad:
+                    # Geofence violation detected - send notifications
+                    try:
+                        # Find supervisor (Head of Department)
+                        supervisor = db.query(User).filter(
+                            User.department_id == current_user.department_id,
+                            User.is_head_of_department == True,
+                            User.deleted_at.is_(None)
+                        ).first()
+                        
+                        if supervisor and supervisor.email:
+                            # Send email notifications to employee and supervisor
+                            await email_service.send_geofence_violation_email(
+                                employee_email=current_user.email,
+                                employee_name=f"{current_user.first_name} {current_user.surname}",
+                                supervisor_email=supervisor.email,
+                                supervisor_name=f"{supervisor.first_name} {supervisor.surname}",
+                                location=location_str or f"Lat: {latitude}, Lng: {longitude}",
+                                distance_outside=dist - rad,
+                                check_in_time=current_time.strftime('%H:%M:%S')
+                            )
+                            
+                            # Send push notifications
+                            if hasattr(current_user, 'fcm_token') and current_user.fcm_token:
+                                await send_push_notification(
+                                    token=current_user.fcm_token,
+                                    title="⚠️ Geofence Violation",
+                                    body=f"Your check-in was detected {dist - rad:.0f}m outside the work area",
+                                    data={
+                                        "type": "geofence_violation",
+                                        "distance": dist - rad,
+                                        "location": location_str
+                                    }
+                                )
+                            
+                            if hasattr(supervisor, 'fcm_token') and supervisor.fcm_token:
+                                await send_push_notification(
+                                    token=supervisor.fcm_token,
+                                    title="🚨 Geofence Violation Alert",
+                                    body=f"{current_user.first_name} {current_user.surname} checked in outside work area",
+                                    data={
+                                        "type": "team_geofence_violation",
+                                        "employee_id": str(current_user.user_id),
+                                        "employee_name": f"{current_user.first_name} {current_user.surname}",
+                                        "distance": dist - rad
+                                    }
+                                )
+                        
+                        # Create notification record
+                        notification = Notification(
+                            user_id=current_user.user_id,
+                            title="Geofence Violation Detected",
+                            message=f"Check-in location was {dist - rad:.0f}m outside work area",
+                            type="security",
+                            is_read=False,
+                            created_at=current_time,
+                            updated_at=current_time
+                        )
+                        db.add(notification)
+                        db.commit()
+                        
+                    except Exception as e:
+                        print(f"Failed to send geofence violation notifications: {e}")
+                    
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Outside allowed work area")
             except Exception:
                 pass

@@ -250,6 +250,706 @@ class EmailService:
                 detail="Failed to send profile update email",
             ) from exc
     
+    async def send_request_submitted_email(
+        self, 
+        email: str, 
+        approver_name: str, 
+        requester_name: str, 
+        request_type: str, 
+        start_date: str, 
+        end_date: str = None
+    ) -> None:
+        """Send email to approver when a new request is submitted"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Format date range
+        if end_date and end_date != start_date:
+            date_range = f"{start_date} to {end_date}"
+        else:
+            date_range = start_date
+        
+        title = "New Request Submitted for Approval"
+        message = f"{requester_name} has submitted a {request_type} request for {date_range} and requires your approval."
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #1f2937; margin: 0 0 24px; font-weight: 600;">
+    {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {approver_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    {message}
+</p>
+<div style="background-color: #f1f5f9; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #167c80;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Requester:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{requester_name}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Request Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{request_type.title()}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Period:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{date_range}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
+            <td style="padding: 8px 0; color: #6b7280;">Pending Approval</td>
+        </tr>
+    </table>
+</div>
+<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 32px 0; text-align: left;">
+    <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 500;">⏰ Action Required</p>
+    <p style="font-size: 14px; color: #92400e; margin: 8px 0 0; line-height: 1.5;">Please review this request in your Staff Track dashboard and take appropriate action.</p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated notification from Staff Track. Please log in to your dashboard to review and respond to this request.</p>
+</div>
+'''
+        subject = f"New {request_type.title()} Request - {requester_name}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Request submitted email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send request submitted email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send request notification",
+            ) from exc
+
+    async def send_request_approved_email(
+        self, 
+        email: str, 
+        requester_name: str, 
+        request_type: str, 
+        start_date: str, 
+        end_date: str = None,
+        approver_name: str = None,
+        comment: str = None
+    ) -> None:
+        """Send email to requester when their request is approved"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Format date range
+        if end_date and end_date != start_date:
+            date_range = f"{start_date} to {end_date}"
+        else:
+            date_range = start_date
+        
+        title = "Your Request Has Been Approved"
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #059669; margin: 0 0 24px; font-weight: 600;">
+    🎉 {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {requester_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Good news! Your {request_type} request for {date_range} has been <strong>approved</strong>.
+</p>
+<div style="background-color: #ecfdf5; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #059669;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Request Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{request_type.title()}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Period:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{date_range}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
+            <td style="padding: 8px 0; color: #059669; font-weight: 600;">✅ Approved</td>
+        </tr>
+    </table>
+</div>
+'''
+        # Add approver comment if provided
+        if comment:
+            body_html += f'''
+<div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+    <h4 style="font-size: 14px; color: #374151; margin: 0 0 8px; font-weight: 600;">Approver's Comment:</h4>
+    <p style="font-size: 14px; color: #6b7280; margin: 0; line-height: 1.5;">{comment}</p>
+</div>
+'''
+        
+        # Add approver name if provided
+        if approver_name:
+            body_html += f'''
+<p style="font-size: 14px; color: #6b7280; margin: 24px 0 0;">
+    Approved by: <strong>{approver_name}</strong>
+</p>
+'''
+        
+        body_html += '''
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated notification from Staff Track. Please keep this for your records.</p>
+</div>
+'''
+        subject = f"Request Approved - {request_type.title()}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Request approved email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send request approved email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send approval notification",
+            ) from exc
+
+    async def send_request_denied_email(
+        self, 
+        email: str, 
+        requester_name: str, 
+        request_type: str, 
+        start_date: str, 
+        end_date: str = None,
+        approver_name: str = None,
+        comment: str = None
+    ) -> None:
+        """Send email to requester when their request is denied"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Format date range
+        if end_date and end_date != start_date:
+            date_range = f"{start_date} to {end_date}"
+        else:
+            date_range = start_date
+        
+        title = "Your Request Has Been Denied"
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #dc2626; margin: 0 0 24px; font-weight: 600;">
+    ❌ {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {requester_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Your {request_type} request for {date_range} has been <strong>denied</strong>.
+</p>
+<div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Request Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{request_type.title()}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Period:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{date_range}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
+            <td style="padding: 8px 0; color: #dc2626; font-weight: 600;">❌ Denied</td>
+        </tr>
+    </table>
+</div>
+'''
+        # Add approver comment if provided
+        if comment:
+            body_html += f'''
+<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 24px 0;">
+    <h4 style="font-size: 14px; color: #92400e; margin: 0 0 8px; font-weight: 600;">Reason for Denial:</h4>
+    <p style="font-size: 14px; color: #92400e; margin: 0; line-height: 1.5;">{comment}</p>
+</div>
+'''
+        
+        # Add approver name if provided
+        if approver_name:
+            body_html += f'''
+<p style="font-size: 14px; color: #6b7280; margin: 24px 0 0;">
+    Reviewed by: <strong>{approver_name}</strong>
+</p>
+'''
+        
+        body_html += '''
+<div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+    <p style="font-size: 14px; color: #374151; margin: 0; line-height: 1.5;">
+        If you have questions about this decision or would like to discuss further, please contact your supervisor or the HR department.
+    </p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated notification from Staff Track.</p>
+</div>
+'''
+        subject = f"Request Denied - {request_type.title()}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Request denied email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send request denied email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send denial notification",
+            ) from exc
+
+    async def send_request_reassigned_email(
+        self, 
+        email: str, 
+        new_approver_name: str, 
+        requester_name: str, 
+        request_type: str, 
+        start_date: str, 
+        end_date: str = None,
+        previous_approver_name: str = None
+    ) -> None:
+        """Send email to new approver when request is reassigned or escalated"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Format date range
+        if end_date and end_date != start_date:
+            date_range = f"{start_date} to {end_date}"
+        else:
+            date_range = start_date
+        
+        title = "Request Escalated for Your Approval"
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #1f2937; margin: 0 0 24px; font-weight: 600;">
+    📋 {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {new_approver_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    A {request_type} request from {requester_name} has been <strong>escalated</strong> to you for approval.
+</p>
+'''
+        # Add previous approver info if provided
+        if previous_approver_name:
+            body_html += f'''
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    This request was previously reviewed by <strong>{previous_approver_name}</strong> and has now been escalated to your level.
+</p>
+'''
+        
+        body_html += f'''
+<div style="background-color: #f1f5f9; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #167c80;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Requester:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{requester_name}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Request Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{request_type.title()}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Period:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{date_range}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
+            <td style="padding: 8px 0; color: #6b7280;">Pending Your Approval</td>
+        </tr>
+    </table>
+</div>
+<div style="background-color: #dbeafe; border-left: 4px solid #2563eb; padding: 16px; border-radius: 6px; margin: 32px 0; text-align: left;">
+    <p style="font-size: 14px; color: #1e3a8a; margin: 0; font-weight: 500;">📈 Escalated Request</p>
+    <p style="font-size: 14px; color: #1e3a8a; margin: 8px 0 0; line-height: 1.5;">This request requires your attention as it has been escalated through the approval chain.</p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated notification from Staff Track. Please log in to your dashboard to review and respond to this escalated request.</p>
+</div>
+'''
+        subject = f"Escalated {request_type.title()} Request - {requester_name}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Request reassigned email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send request reassigned email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send reassignment notification",
+            ) from exc
+
+    async def send_geofence_violation_email(
+        self, 
+        employee_email: str, 
+        employee_name: str, 
+        supervisor_email: str, 
+        supervisor_name: str,
+        location: str,
+        distance_outside: float,
+        check_in_time: str
+    ) -> None:
+        """Send email notification for geofence violation to employee and supervisor"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Email to employee
+        employee_subject = "⚠️ Geofence Violation Alert - Check-in Outside Allowed Area"
+        employee_body_html = f'''
+<h1 style="font-size: 28px; color: #dc2626; margin: 0 0 24px; font-weight: 600;">
+    ⚠️ Geofence Violation Detected
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {employee_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Your recent check-in at <strong>{check_in_time}</strong> was detected <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
+</p>
+<div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Violation Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Check-in Time:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{check_in_time}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Location:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{location}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Distance from Office:</td>
+            <td style="padding: 8px 0; color: #dc2626; font-weight: 600;">{distance_outside:.0f} meters outside</td>
+        </tr>
+    </table>
+</div>
+<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 32px 0;">
+    <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 500;">⚠️ Action Required</p>
+    <p style="font-size: 14px; color: #92400e; margin: 8px 0 0; line-height: 1.5;">Please ensure you are within the designated work area for check-ins. Contact your supervisor if you believe this is an error.</p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated security alert from Staff Track. Your supervisor has been notified.</p>
+</div>
+'''
+        
+        # Email to supervisor
+        supervisor_subject = f"🚨 Geofence Violation - {employee_name}"
+        supervisor_body_html = f'''
+<h1 style="font-size: 28px; color: #dc2626; margin: 0 0 24px; font-weight: 600;">
+    🚨 Team Member Geofence Violation
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {supervisor_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    <strong>{employee_name}</strong> has checked in <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
+</p>
+<div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Violation Details</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Employee:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{employee_name}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Check-in Time:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{check_in_time}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Location:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{location}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Distance from Office:</td>
+            <td style="padding: 8px 0; color: #dc2626; font-weight: 600;">{distance_outside:.0f} meters outside</td>
+        </tr>
+    </table>
+</div>
+<div style="background-color: #dbeafe; border-left: 4px solid #2563eb; padding: 16px; border-radius: 6px; margin: 32px 0;">
+    <p style="font-size: 14px; color: #1e3a8a; margin: 0; font-weight: 500;">👁️ Supervisor Action</p>
+    <p style="font-size: 14px; color: #1e3a8a; margin: 8px 0 0; line-height: 1.5;">Please review this violation and follow up with the employee if necessary. This may require investigation or disciplinary action.</p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated security alert from Staff Track. Please review your dashboard for more details.</p>
+</div>
+'''
+        
+        # Send emails
+        try:
+            # Send to employee
+            employee_params = {
+                "from": from_email,
+                "to": [employee_email],
+                "subject": employee_subject,
+                "html": self.build_email_html(employee_subject, employee_body_html)
+            }
+            resend.Emails.send(employee_params)
+            logger.info(f"Geofence violation email sent to employee {employee_email}")
+            
+            # Send to supervisor
+            supervisor_params = {
+                "from": from_email,
+                "to": [supervisor_email],
+                "subject": supervisor_subject,
+                "html": self.build_email_html(supervisor_subject, supervisor_body_html)
+            }
+            resend.Emails.send(supervisor_params)
+            logger.info(f"Geofence violation email sent to supervisor {supervisor_email}")
+            
+        except Exception as exc:
+            logger.error("Failed to send geofence violation emails: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send geofence violation notification",
+            ) from exc
+
+    async def send_announcement_email(
+        self, 
+        email: str, 
+        recipient_name: str, 
+        announcement_title: str, 
+        announcement_message: str,
+        announcement_type: str,
+        target_audience: str,
+        author_name: str = None
+    ) -> None:
+        """Send email notification for announcements to target audience"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        # Different styling based on announcement type
+        if announcement_type.lower() == "urgent":
+            title_color = "#dc2626"
+            icon = "🚨"
+            bg_color = "#fef2f2"
+            border_color = "#dc2626"
+        elif announcement_type.lower() == "policy":
+            title_color = "#1e40af"
+            icon = "📋"
+            bg_color = "#eff6ff"
+            border_color = "#1e40af"
+        else:
+            title_color = "#059669"
+            icon = "📢"
+            bg_color = "#ecfdf5"
+            border_color = "#059669"
+        
+        title = f"{icon} {announcement_type.title()} Announcement"
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: {title_color}; margin: 0 0 24px; font-weight: 600;">
+    {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {recipient_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Please review the following {announcement_type.lower()} announcement:
+</p>
+<div style="background-color: {bg_color}; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid {border_color};">
+    <h3 style="font-size: 20px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">{announcement_title}</h3>
+    <div style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0;">
+        {announcement_message.replace(chr(10), '<br>')}
+    </div>
+</div>
+'''
+        # Add author info if provided
+        if author_name:
+            body_html += f'''
+<p style="font-size: 14px; color: #6b7280; margin: 24px 0 0;">
+    Sent by: <strong>{author_name}</strong>
+</p>
+'''
+        
+        # Add target audience info
+        body_html += f'''
+<p style="font-size: 14px; color: #6b7280; margin: 8px 0 0;">
+    Audience: <strong>{target_audience}</strong>
+</p>
+'''
+        
+        # Add action based on type
+        if announcement_type.lower() == "urgent":
+            body_html += '''
+<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 24px 0;">
+    <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 500;">⚠️ Immediate Attention Required</p>
+    <p style="font-size: 14px; color: #92400e; margin: 8px 0 0; line-height: 1.5;">This is an urgent announcement that requires your immediate attention and action.</p>
+</div>
+'''
+        elif announcement_type.lower() == "policy":
+            body_html += '''
+<div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+    <p style="font-size: 14px; color: #374151; margin: 0; line-height: 1.5;">
+        Please review this policy update carefully and ensure compliance with the new guidelines.
+    </p>
+</div>
+'''
+        
+        body_html += '''
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated announcement from Staff Track. Please contact your supervisor if you have any questions.</p>
+</div>
+'''
+        subject = f"{announcement_type.title()}: {announcement_title}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Announcement email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send announcement email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send announcement notification",
+            ) from exc
+
+    async def send_leave_policy_applied_email(
+        self, 
+        email: str, 
+        employee_name: str, 
+        leave_type: str, 
+        allocated_days: int, 
+        bonus_days: int = 0,
+        total_available: int = None,
+        applied_by: str = None,
+        target_role: str = None,
+        target_department: str = None
+    ) -> None:
+        """Send email notification when leave policy is applied to employee"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        total_days = total_available or (allocated_days + bonus_days)
+        
+        title = "📊 Leave Policy Update"
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #1e40af; margin: 0 0 24px; font-weight: 600;">
+    {title}
+</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Hi {employee_name},
+</p>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
+    Your leave policy has been updated. Here are your new leave entitlement details:
+</p>
+<div style="background-color: #eff6ff; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #1e40af;">
+    <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Updated Leave Entitlement</h3>
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Leave Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{leave_type.title().replace('_', ' ')}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Allocated Days:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{allocated_days} days</td>
+        </tr>
+'''
+        # Add bonus days if applicable
+        if bonus_days > 0:
+            body_html += f'''
+        <tr>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Bonus Days:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{bonus_days} days</td>
+        </tr>
+'''
+        
+        body_html += f'''
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Total Available:</td>
+            <td style="padding: 8px 0; color: #1e40af; font-weight: 600;">{total_days} days</td>
+        </tr>
+    </table>
+</div>
+'''
+        
+        # Add policy scope information
+        scope_info = []
+        if target_role:
+            scope_info.append(f"Role: {target_role}")
+        if target_department:
+            scope_info.append(f"Department: {target_department}")
+        
+        if scope_info:
+            body_html += f'''
+<div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+    <p style="font-size: 14px; color: #374151; margin: 0; line-height: 1.5;">
+        <strong>Policy Scope:</strong> {", ".join(scope_info)}
+    </p>
+</div>
+'''
+        
+        # Add applied by information
+        if applied_by:
+            body_html += f'''
+<p style="font-size: 14px; color: #6b7280; margin: 24px 0 0;">
+    Policy applied by: <strong>{applied_by}</strong>
+</p>
+'''
+        
+        body_html += '''
+<div style="background-color: #ecfdf5; border-left: 4px solid #059669; padding: 16px; border-radius: 6px; margin: 24px 0;">
+    <p style="font-size: 14px; color: #065f46; margin: 0; font-weight: 500;">💡 What This Means</p>
+    <p style="font-size: 14px; color: #065f46; margin: 8px 0 0; line-height: 1.5;">
+        You can now request up to {total_days} days of {leave_type.replace('_', ' ')} leave. You can view your leave balance and submit requests through the Staff Track app.
+    </p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated notification from Staff Track. Please contact HR if you have any questions about your leave entitlement.</p>
+</div>
+'''.format(total_days=total_days, leave_type=leave_type.replace('_', ' '))
+        
+        subject = f"Leave Policy Updated - {leave_type.title().replace('_', ' ')}"
+        html_body = self.build_email_html(subject, body_html)
+
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": subject,
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+            logger.info(f"Leave policy email sent to {email}")
+        except Exception as exc:
+            logger.error("Failed to send leave policy email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send leave policy notification",
+            ) from exc
+
     async def send_password_reset_email(self, email: str, first_name: str) -> None:
         from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
         

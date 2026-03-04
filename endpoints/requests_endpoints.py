@@ -8,6 +8,7 @@ from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, RequestApproval, Notification, LeaveBalance, Role
 from fcm_service import send_push_notification
+from mail_service import email_service
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -148,6 +149,37 @@ async def create_request(
         )
 
     db.commit()
+
+    # Send email and push notification to approver
+    if approver_id:
+        approver = db.query(User).filter(User.user_id == approver_id).first()
+        if approver and approver.email:
+            try:
+                # Send email notification to approver
+                await email_service.send_request_submitted_email(
+                    email=approver.email,
+                    approver_name=approver.first_name,
+                    requester_name=f"{current_user.first_name} {current_user.surname}",
+                    request_type=payload.type,
+                    start_date=start_date.strftime('%B %d, %Y'),
+                    end_date=end_date.strftime('%B %d, %Y') if end_date != start_date else None
+                )
+                
+                # Send push notification if approver has FCM token
+                if hasattr(approver, 'fcm_token') and approver.fcm_token:
+                    await send_push_notification(
+                        token=approver.fcm_token,
+                        title="New Request Submitted",
+                        body=f"{current_user.first_name} {current_user.surname} submitted a {payload.type} request for your approval",
+                        data={
+                            "type": "new_request",
+                            "request_id": str(result[0]),
+                            "requester_name": f"{current_user.first_name} {current_user.surname}"
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the request creation
+                print(f"Failed to send notification to approver: {e}")
 
     return {"success": True, "id": str(result[0])}
 
@@ -489,6 +521,41 @@ async def approve_request(
     db.commit()
     # Notify next approver or finalize
     if next_approver_id:
+        # Get requester details for email
+        requester = db.query(User).filter(User.user_id == user_id).first()
+        
+        # Send email and push notification to next approver
+        next_user = db.query(User).filter(User.user_id == next_approver_id).first()
+        if next_user and next_user.email:
+            try:
+                # Send email notification to next approver
+                await email_service.send_request_reassigned_email(
+                    email=next_user.email,
+                    new_approver_name=f"{next_user.first_name} {next_user.surname}",
+                    requester_name=f"{requester.first_name} {requester.surname}" if requester else "Unknown",
+                    request_type=rtype,
+                    start_date=sd.strftime('%B %d, %Y'),
+                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
+                    previous_approver_name=f"{current_user.first_name} {current_user.surname}"
+                )
+                
+                # Send push notification if next approver has FCM token
+                if hasattr(next_user, 'fcm_token') and next_user.fcm_token:
+                    await send_push_notification(
+                        token=next_user.fcm_token,
+                        title="Request Escalated",
+                        body=f"{rtype} request has been escalated to you for approval",
+                        data={
+                            "type": "request_escalated",
+                            "request_id": request_id,
+                            "request_type": rtype,
+                            "escalated_by": f"{current_user.first_name} {current_user.surname}"
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the approval
+                print(f"Failed to send escalation notification to next approver: {e}")
+        
         db.add(Notification(
             user_id=next_approver_id,
             title="Request Pending Approval",
@@ -520,6 +587,38 @@ async def approve_request(
             lb.remaining_days = max(total - (lb.used_days or 0), 0)
             lb.updated_at = datetime.utcnow()
             db.commit()
+        
+        # Send email and push notification to requester
+        requester = db.query(User).filter(User.user_id == user_id).first()
+        if requester and requester.email:
+            try:
+                # Send email notification to requester
+                await email_service.send_request_approved_email(
+                    email=requester.email,
+                    requester_name=f"{requester.first_name} {requester.surname}",
+                    request_type=rtype,
+                    start_date=sd.strftime('%B %d, %Y'),
+                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
+                    approver_name=f"{current_user.first_name} {current_user.surname}",
+                    comment=comment
+                )
+                
+                # Send push notification if requester has FCM token
+                if hasattr(requester, 'fcm_token') and requester.fcm_token:
+                    await send_push_notification(
+                        token=requester.fcm_token,
+                        title="Request Approved",
+                        body=f"Your {rtype} request for {duration} day(s) has been approved",
+                        data={
+                            "type": "request_approved",
+                            "request_id": request_id,
+                            "request_type": rtype
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the approval
+                print(f"Failed to send approval notification to requester: {e}")
+        
         db.add(Notification(user_id=user_id, title="Request Approved", message=f"{rtype} approved for {duration} day(s)", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow()))
         db.commit()
         user = db.query(User).filter(User.user_id == user_id).first()
@@ -715,10 +814,44 @@ async def deny_request(
     db.commit()
     db.add(RequestApproval(request_id=result[0], approver_id=current_user.user_id, level=1, action="denied", comment=comment, timestamp=datetime.utcnow()))
     db.commit()
-    req = db.execute(text("SELECT user_id, type FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
+    req = db.execute(text("SELECT user_id, type, start_date, end_date FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
     if req:
         uid = req[0]
         rtype = req[1]
+        sd = req[2]
+        ed = req[3] or req[2]
+        
+        # Send email and push notification to requester
+        requester = db.query(User).filter(User.user_id == uid).first()
+        if requester and requester.email:
+            try:
+                # Send email notification to requester
+                await email_service.send_request_denied_email(
+                    email=requester.email,
+                    requester_name=f"{requester.first_name} {requester.surname}",
+                    request_type=rtype,
+                    start_date=sd.strftime('%B %d, %Y'),
+                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
+                    approver_name=f"{current_user.first_name} {current_user.surname}",
+                    comment=comment
+                )
+                
+                # Send push notification if requester has FCM token
+                if hasattr(requester, 'fcm_token') and requester.fcm_token:
+                    await send_push_notification(
+                        token=requester.fcm_token,
+                        title="Request Denied",
+                        body=f"Your {rtype} request has been denied",
+                        data={
+                            "type": "request_denied",
+                            "request_id": request_id,
+                            "request_type": rtype
+                        }
+                    )
+            except Exception as e:
+                # Log error but don't fail the denial
+                print(f"Failed to send denial notification to requester: {e}")
+        
         n = Notification(user_id=uid, title="Request Denied", message=f"{rtype} denied", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
         db.add(n)
         db.commit()

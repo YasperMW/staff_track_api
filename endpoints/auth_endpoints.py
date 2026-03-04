@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from database import get_db
 from mail_service import email_service
+from notification_service import NotificationService
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -451,6 +452,12 @@ async def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
                 user.status = "active"
                 user.updated_at = datetime.utcnow()
                 db.commit()
+                
+                # Create default notification preferences for the user
+                try:
+                    NotificationService.create_default_preferences(db, str(user.user_id))
+                except Exception as e:
+                    print(f"Failed to create notification preferences: {e}")
                 
                 # Send welcome email
                 try:

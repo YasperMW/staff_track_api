@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints
 from database import engine
 from models.db_models import Base
 import os
@@ -41,6 +41,7 @@ app.include_router(announcements_endpoints.router, prefix="/api/announcements", 
 app.include_router(holidays_endpoints.router, prefix="/api/holidays", tags=["holidays"])
 app.include_router(leave_endpoints.router, prefix="/api", tags=["leave"])
 app.include_router(leave_policy_endpoints.router, tags=["leave"])
+app.include_router(notification_preferences_endpoints.router, tags=["notification-preferences"])
 
 import asyncio
 from datetime import datetime

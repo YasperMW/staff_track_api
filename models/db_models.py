@@ -148,6 +148,21 @@ class UserFCMToken(Base):
     # Relationships
     user = relationship("User", back_populates="fcm_tokens", foreign_keys=[user_id])
 
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    
+    preference_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    category = Column(String(50), nullable=False)  # requests, announcements, policies, security, reminders, system
+    email_enabled = Column(Boolean, default=True)
+    push_enabled = Column(Boolean, default=True)
+    in_app_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id])
+
 class EmailVerification(Base):
     __tablename__ = "email_verifications"
     
