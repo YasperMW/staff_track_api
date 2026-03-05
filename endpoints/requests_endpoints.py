@@ -341,7 +341,6 @@ async def get_admin_pending_requests_list(
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
             WHERE {' AND '.join(where_clauses)}
-            ORDER BY r.created_at DESC
         """
     else:
         where_clauses.append("(r.current_approver_id IS NULL OR r.current_approver_id = :approver_id)")
@@ -370,7 +369,6 @@ async def get_admin_pending_requests_list(
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
             WHERE {' AND '.join(where_clauses)}
-            ORDER BY r.created_at DESC
         """
 
     sort_map = {"created_at": "r.created_at", "start_date": "r.start_date", "end_date": "r.end_date"}

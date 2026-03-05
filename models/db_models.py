@@ -254,21 +254,29 @@ class RequestApproval(Base):
 
 class LeaveBalance(Base):
     __tablename__ = "leave_balances"
-    balance_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    leave_balance_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     leave_type = Column(String(50), nullable=False)
-    allocated_days = Column(Integer, default=0)
-    used_days = Column(Integer, default=0)
-    bonus_days = Column(Integer, default=0)
-    remaining_days = Column(Integer, default=0)
+    allocated_days = Column(Numeric(5,2), default=0)
+    used_days = Column(Numeric(5,2), default=0)
+    bonus_days = Column(Numeric(5,2), default=0)
+    remaining_days = Column(Numeric(5,2))
+    year = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
     user = relationship("User", foreign_keys=[user_id])
 
 class EmployeeFile(Base):
     __tablename__ = "employee_files"
-    file_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_file_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     file_type = Column(String(50), nullable=False)
     file_url = Column(Text, nullable=False)
+    original_filename = Column(String(255))
     upload_date = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
     user = relationship("User", foreign_keys=[user_id])

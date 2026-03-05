@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func, and_
+from sqlalchemy import text, func, and_, desc
 from datetime import datetime, date, time, timedelta
 from typing import Optional
 from pydantic import BaseModel
@@ -10,7 +10,8 @@ import pytz
 from geoalchemy2 import WKTElement
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
-from models.db_models import User, AttendanceLog, Notification, Role
+from models.db_models import User, AttendanceLog, Notification, Role, AuditLog
+from models.auth_models import CheckInRequest, CheckOutRequest
 from fcm_service import send_push_notification
 from mail_service import email_service
 
@@ -108,16 +109,26 @@ async def get_my_profile_metrics(
     }
 @router.post("/check-in")
 async def check_in(
-    location: Optional[str] = None,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
-    accuracy: Optional[float] = None,
-    device_id: Optional[str] = None,
-    shift_type: Optional[str] = None,
+    request: CheckInRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Check in current user"""
+    
+    # Extract data from request
+    location = request.location
+    latitude = request.latitude
+    longitude = request.longitude
+    accuracy = request.accuracy
+    device_id = request.device_id
+    shift_type = request.shift_type
+    
+    # Validate location data - location is required
+    if not location and not (latitude and longitude):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Location data is required. Either provide location string or latitude and longitude."
+        )
     
     # Debug logging
     print(f"DEBUG: Check-in request received:")
@@ -307,15 +318,25 @@ async def check_in(
 
 @router.post("/check-out")
 async def check_out(
-    location: Optional[str] = None,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
-    accuracy: Optional[float] = None,
-    device_id: Optional[str] = None,
+    request: CheckOutRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Check out the current user"""
+    
+    # Extract data from request
+    location = request.location
+    latitude = request.latitude
+    longitude = request.longitude
+    accuracy = request.accuracy
+    device_id = request.device_id
+    
+    # Validate location data - location is required
+    if not location and not (latitude and longitude):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Location data is required. Either provide location string or latitude and longitude."
+        )
     
     # Debug logging
     print(f"DEBUG: Check-out request received:")

@@ -20,16 +20,30 @@ class RegisterRequest(BaseModel):
     traditional_authority: str
     district: str
     current_address: str
-    marital_status: str
+    marital_status: Optional[str] = ""
     spouse_name: Optional[str] = ""
     spouse_contact: Optional[str] = ""
     date_of_employment: str
     designation_id: str
-    role: str
-    department: str
-    is_head_of_department: bool = False
+    department_id: str
     password: str
-    profile_photo_url: Optional[str] = None
+    confirm_password: str
+
+# Attendance request models
+class CheckInRequest(BaseModel):
+    location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    device_id: Optional[str] = None
+    shift_type: Optional[str] = None
+
+class CheckOutRequest(BaseModel):
+    location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    device_id: Optional[str] = None
 
 class AuthResponse(BaseModel):
     success: bool

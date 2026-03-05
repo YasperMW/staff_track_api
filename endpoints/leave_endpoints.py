@@ -26,10 +26,10 @@ async def get_my_leave_balances(
     return [
         LeaveBalanceResponse(
             leave_type=b.leave_type,
-            allocated_days=b.allocated_days or 0,
-            used_days=b.used_days or 0,
-            bonus_days=b.bonus_days or 0,
-            remaining_days=b.remaining_days or 0,
+            allocated_days=int(b.allocated_days or 0),
+            used_days=int(b.used_days or 0),
+            bonus_days=int(b.bonus_days or 0),
+            remaining_days=int(b.remaining_days or 0),
             updated_at=b.updated_at.isoformat() if b.updated_at else datetime.utcnow().isoformat()
         )
         for b in balances

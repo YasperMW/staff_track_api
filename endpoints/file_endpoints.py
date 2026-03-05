@@ -100,4 +100,4 @@ async def list_employee_files(
     current_user: User = Depends(get_current_user)
 ):
     rows = db.query(EmployeeFile).filter(EmployeeFile.user_id == current_user.user_id).order_by(EmployeeFile.upload_date.desc()).all()
-    return [{"file_id": str(r.file_id), "file_type": r.file_type, "file_url": r.file_url, "upload_date": r.upload_date.isoformat() if r.upload_date else None} for r in rows]
+    return [{"file_id": str(r.employee_file_id), "file_type": r.file_type, "file_url": r.file_url, "upload_date": r.upload_date.isoformat() if r.upload_date else None} for r in rows]
