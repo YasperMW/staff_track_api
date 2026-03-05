@@ -34,6 +34,7 @@ class User(Base):
     phone = Column(String(30), unique=True)
     password_hash = Column(Text, nullable=False)
     role_id = Column(UUID(as_uuid=True), ForeignKey("roles.role_id"), nullable=False)
+    grade_id = Column(UUID(as_uuid=True), ForeignKey("grades.grade_id"))
     status = Column(String(30), nullable=False, default="pending")
     profile_photo_url = Column(Text)
     blacklisted_at = Column(DateTime(timezone=True))
@@ -48,6 +49,7 @@ class User(Base):
     
     # Relationships
     role = relationship("Role", back_populates="users", foreign_keys=[role_id])
+    grade = relationship("Grade", back_populates="users", foreign_keys=[grade_id])
     department = relationship("Department", back_populates="users", foreign_keys=[department_id])
     designation = relationship("Designation", back_populates="users", foreign_keys=[designation_id])
     fcm_tokens = relationship("UserFCMToken", back_populates="user", cascade="all, delete-orphan")
@@ -67,6 +69,20 @@ class Designation(Base):
     # Relationships
     department = relationship("Department", back_populates="designations", foreign_keys=[department_id])
     users = relationship("User", back_populates="designation", foreign_keys="User.designation_id")
+
+class Grade(Base):
+    __tablename__ = "grades"
+    
+    grade_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), nullable=False, unique=True)
+    annual_leave_days = Column(Integer, nullable=False, default=21)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    
+    # Relationships
+    users = relationship("User", back_populates="grade", foreign_keys="User.grade_id")
 
 class Role(Base):
     __tablename__ = "roles"
@@ -242,6 +258,45 @@ class AuditLog(Base):
     details = Column(JSONB)
     timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
 
+class Request(Base):
+    __tablename__ = "requests"
+    request_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    type = Column(String(50), nullable=False)
+    reason = Column(Text)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date)
+    status = Column(String(20), default="pending", nullable=False)
+    current_approver_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    approval_level = Column(Integer, default=1, nullable=False)
+    approval_comments = Column(JSONB)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+
+    # Section A - Applicant
+    leave_grant_required = Column(Boolean, default=False)
+    contact_address = Column(Text)
+
+    # Second Form - Leave Duty Station (Applicant fields stay here)
+    reason_for_leaving = Column(Text)
+    travel_date = Column(Date)
+    travel_place = Column(String(255))
+    
+    cost_accommodation = Column(Numeric(12, 2))
+    cost_breakfast = Column(Numeric(12, 2))
+    cost_lunch = Column(Numeric(12, 2))
+    cost_supper = Column(Numeric(12, 2))
+    cost_public_transport = Column(Numeric(12, 2))
+    cost_fuel_lubricants = Column(Numeric(12, 2))
+    cost_total = Column(Numeric(12, 2))
+
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id])
+    current_approver = relationship("User", foreign_keys=[current_approver_id])
+    approvals = relationship("RequestApproval", back_populates="request")
+
 class RequestApproval(Base):
     __tablename__ = "request_approvals"
     approval_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -251,6 +306,41 @@ class RequestApproval(Base):
     action = Column(String(20), nullable=False)
     comment = Column(Text)
     timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+
+    # Move stage-specific fields here
+    # Section B - HOD (Leave)
+    hod_recommended_from = Column(Date)
+    hod_recommended_to = Column(Date)
+    hod_not_recommended_reason = Column(Text)
+
+    # Section C - HR (Leave)
+    hr_annual_entitlement = Column(Numeric(5, 2))
+    hr_entitlement_taken_from = Column(Date)
+    hr_entitlement_taken_to = Column(Date)
+    hr_last_leave_from = Column(Date)
+    hr_last_leave_to = Column(Date)
+    hr_last_leave_days = Column(Numeric(5, 2))
+    hr_balance_if_approved = Column(Numeric(5, 2))
+    hr_leave_grant_status = Column(String(30))
+
+    # Section D - Administrator (Leave)
+    admin_granted_from = Column(Date)
+    admin_granted_to = Column(Date)
+    admin_total_days_approved = Column(Numeric(5, 2))
+
+    # Section C - Accountant (Trip)
+    accountant_funds_available = Column(Boolean)
+    accountant_signed_date = Column(Date)
+    
+    # Section D - HOD (Trip)
+    hod_trip_recommendation = Column(Text)
+    
+    # Section E - Admin (Trip)
+    admin_trip_approval_details = Column(Text)
+    
+    # Relationships
+    request = relationship("Request", back_populates="approvals")
+    approver = relationship("User", foreign_keys=[approver_id])
 
 class LeaveBalance(Base):
     __tablename__ = "leave_balances"

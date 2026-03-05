@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from models.auth_models import LoginRequest, RegisterRequest, AuthResponse, ResetPasswordRequest, OTPRequest, OTPVerifyRequest, OTPResponse, ConfirmPasswordResetRequest
-from models.db_models import User, Role, Department, Designation, EmailVerification
-from typing import Optional
+from models.db_models import User, Role, Department, Designation, EmailVerification, Grade
+from typing import Optional, List
 import hashlib
 import jwt
 from datetime import datetime, timedelta
@@ -30,6 +30,19 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 # Mock database (in production, use a real database)
 # users_db = {}
 # sessions_db = {}
+
+@router.get("/grades")
+async def get_grades(db: Session = Depends(get_db)):
+    """Fetch all grades"""
+    grades = db.query(Grade).filter(Grade.deleted_at.is_(None)).all()
+    return [
+        {
+            "id": str(g.grade_id),
+            "name": g.name,
+            "annual_leave_days": g.annual_leave_days
+        }
+        for g in grades
+    ]
 
 # Helper functions
 import bcrypt
@@ -252,6 +265,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         date_of_employment=request.date_of_employment,
         designation_id=designation.designation_id,
         department_id=department.department_id,
+        grade_id=request.grade_id,
         role_id=role.role_id,
         password_hash=hashed_password,
         profile_photo_url=request.profile_photo_url,

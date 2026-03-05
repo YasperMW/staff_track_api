@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
-from models.db_models import User, RequestApproval, Notification, LeaveBalance, Role
+from models.db_models import User, RequestApproval, Notification, LeaveBalance, Role, Request
 from fcm_service import send_push_notification
 from mail_service import email_service
 
@@ -17,6 +17,48 @@ class RequestCreate(BaseModel):
     type: str
     start_date: str
     end_date: Optional[str] = None
+    # Section A - Leave Request
+    leave_grant_required: bool = False
+    contact_address: Optional[str] = None
+    # Section A - Trip Request
+    reason_for_leaving: Optional[str] = None
+    travel_date: Optional[str] = None
+    travel_place: Optional[str] = None
+    # Section B - Trip Costs
+    cost_accommodation: Optional[float] = None
+    cost_breakfast: Optional[float] = None
+    cost_lunch: Optional[float] = None
+    cost_supper: Optional[float] = None
+    cost_public_transport: Optional[float] = None
+    cost_fuel_lubricants: Optional[float] = None
+    cost_total: Optional[float] = None
+
+
+class ApprovalPayload(BaseModel):
+    comment: Optional[str] = None
+    # HOD fields (Section B - Leave)
+    hod_recommended_from: Optional[date] = None
+    hod_recommended_to: Optional[date] = None
+    hod_not_recommended_reason: Optional[str] = None
+    # HR fields (Section C - Leave)
+    hr_annual_entitlement: Optional[float] = None
+    hr_entitlement_taken_from: Optional[date] = None
+    hr_entitlement_taken_to: Optional[date] = None
+    hr_last_leave_from: Optional[date] = None
+    hr_last_leave_to: Optional[date] = None
+    hr_last_leave_days: Optional[float] = None
+    hr_balance_if_approved: Optional[float] = None
+    hr_leave_grant_status: Optional[str] = None
+    # Admin fields (Section D - Leave)
+    admin_granted_from: Optional[date] = None
+    admin_granted_to: Optional[date] = None
+    admin_total_days_approved: Optional[float] = None
+    # Section C - Trip (Accountant)
+    accountant_funds_available: Optional[bool] = None
+    # Section D - Trip (HOD)
+    hod_trip_recommendation: Optional[str] = None
+    # Section E - Trip (Admin)
+    admin_trip_approval_details: Optional[str] = None
 
 
 @router.get("/summary")
@@ -78,77 +120,80 @@ async def create_request(
             detail="Invalid end_date format. Use YYYY-MM-DD.",
         )
 
-    now = datetime.utcnow()
-    # Determine initial approver: HOD -> HR Admin -> Accountant -> Principal Hospital Administrator
-    approver_id = None
-    hod = db.query(User).filter(
-        User.department_id == current_user.department_id,
-        User.is_head_of_department == True,
-        User.deleted_at.is_(None)
-    ).first()
-    if hod:
-        approver_id = hod.user_id
-    else:
-        hr = db.query(User).join(Role).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
-        if hr:
-            approver_id = hr.user_id
+    # Validate Annual Leave days against Grade
+    if payload.type.lower() == "annual leave":
+        requested_days = (end_date - start_date).days + 1
+        if current_user.grade:
+            max_days = current_user.grade.annual_leave_days
+            if requested_days > max_days:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Annual leave request exceeds your grade limit of {max_days} days. You requested {requested_days} days."
+                )
         else:
-            accountant = db.query(User).join(Role).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
-            if accountant:
-                approver_id = accountant.user_id
+            # If no grade is assigned, use a default or allow for now? 
+            # The user said grade selection is added during registration, so new users will have it.
+            pass
+
+    now = datetime.utcnow()
+    # Determine initial approver
+    approver_id = None
+    
+    if payload.type.lower() == "leave duty station":
+        # Chain: Accountant -> HOD -> Admin
+        accountant = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
+        if accountant:
+            approver_id = accountant.user_id
+        else:
+            # Fallback to HOD if no accountant
+            hod = db.query(User).filter(User.department_id == current_user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
+            approver_id = hod.user_id if hod else None
+    else:
+        # Standard Leave Request chain: HOD -> HR -> Admin
+        hod = db.query(User).filter(
+            User.department_id == current_user.department_id,
+            User.is_head_of_department == True,
+            User.deleted_at.is_(None)
+        ).first()
+        if hod:
+            approver_id = hod.user_id
+        else:
+            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
+            if hr:
+                approver_id = hr.user_id
             else:
-                principal = db.query(User).join(Role).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+                principal = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
                 if principal:
                     approver_id = principal.user_id
 
-    result = db.execute(
-        text(
-            """
-            INSERT INTO requests (
-                request_id,
-                user_id,
-                type,
-                start_date,
-                end_date,
-                status,
-                current_approver_id,
-                created_at,
-                updated_at,
-                deleted_at
-            )
-            VALUES (
-                gen_random_uuid(),
-                :user_id,
-                :type,
-                :start_date,
-                :end_date,
-                'pending',
-                :current_approver_id,
-                :created_at,
-                :updated_at,
-                NULL
-            )
-            RETURNING request_id
-            """
-        ),
-        {
-            "user_id": current_user.user_id,
-            "type": payload.type,
-            "start_date": start_date,
-            "end_date": end_date,
-            "current_approver_id": approver_id,
-            "created_at": now,
-            "updated_at": now,
-        },
-    ).fetchone()
-
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create request",
-        )
-
+    new_request = Request(
+        user_id=current_user.user_id,
+        type=payload.type,
+        start_date=start_date,
+        end_date=end_date,
+        status='pending',
+        current_approver_id=approver_id,
+        approval_level=1,
+        leave_grant_required=payload.leave_grant_required,
+        contact_address=payload.contact_address,
+        # Trip fields
+        reason_for_leaving=payload.reason_for_leaving,
+        travel_date=date.fromisoformat(payload.travel_date) if payload.travel_date else None,
+        travel_place=payload.travel_place,
+        cost_accommodation=payload.cost_accommodation,
+        cost_breakfast=payload.cost_breakfast,
+        cost_lunch=payload.cost_lunch,
+        cost_supper=payload.cost_supper,
+        cost_public_transport=payload.cost_public_transport,
+        cost_fuel_lubricants=payload.cost_fuel_lubricants,
+        cost_total=payload.cost_total,
+        created_at=now,
+        updated_at=now
+    )
+    
+    db.add(new_request)
     db.commit()
+    db.refresh(new_request)
 
     # Send email and push notification to approver
     if approver_id:
@@ -165,23 +210,71 @@ async def create_request(
                     end_date=end_date.strftime('%B %d, %Y') if end_date != start_date else None
                 )
                 
-                # Send push notification if approver has FCM token
-                if hasattr(approver, 'fcm_token') and approver.fcm_token:
-                    await send_push_notification(
-                        token=approver.fcm_token,
-                        title="New Request Submitted",
-                        body=f"{current_user.first_name} {current_user.surname} submitted a {payload.type} request for your approval",
-                        data={
-                            "type": "new_request",
-                            "request_id": str(result[0]),
-                            "requester_name": f"{current_user.first_name} {current_user.surname}"
-                        }
-                    )
+                # Send push notification if approver has FCM tokens
+                if approver.fcm_tokens:
+                    for tok in approver.fcm_tokens:
+                        try:
+                            await send_push_notification(
+                                token=tok.fcm_token,
+                                title="New Request Submitted",
+                                body=f"{current_user.first_name} {current_user.surname} submitted a {payload.type} request for your approval",
+                                data={
+                                    "type": "new_request",
+                                    "request_id": str(new_request.request_id),
+                                    "requester_name": f"{current_user.first_name} {current_user.surname}"
+                                }
+                            )
+                        except Exception:
+                            pass
             except Exception as e:
                 # Log error but don't fail the request creation
                 print(f"Failed to send notification to approver: {e}")
 
-    return {"success": True, "id": str(result[0])}
+    return {"success": True, "id": str(new_request.request_id)}
+
+
+@router.get("/{request_id}/approvals")
+async def get_request_approvals(
+    request_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    approvals = db.query(RequestApproval).filter(RequestApproval.request_id == request_id).order_by(RequestApproval.timestamp.asc()).all()
+    
+    return [
+        {
+            "approver_name": f"{a.approver.first_name} {a.approver.surname}" if a.approver else "Unknown",
+            "level": a.level,
+            "action": a.action,
+            "comment": a.comment,
+            "timestamp": a.timestamp.isoformat() if a.timestamp else None,
+            # Leave Stage 1 (HOD)
+            "hod_recommended_from": a.hod_recommended_from.isoformat() if a.hod_recommended_from else None,
+            "hod_recommended_to": a.hod_recommended_to.isoformat() if a.hod_recommended_to else None,
+            "hod_not_recommended_reason": a.hod_not_recommended_reason,
+            # Leave Stage 2 (HR)
+            "hr_annual_entitlement": float(a.hr_annual_entitlement) if a.hr_annual_entitlement else None,
+            "hr_entitlement_taken_from": a.hr_entitlement_taken_from.isoformat() if a.hr_entitlement_taken_from else None,
+            "hr_entitlement_taken_to": a.hr_entitlement_taken_to.isoformat() if a.hr_entitlement_taken_to else None,
+            "hr_last_leave_from": a.hr_last_leave_from.isoformat() if a.hr_last_leave_from else None,
+            "hr_last_leave_to": a.hr_last_leave_to.isoformat() if a.hr_last_leave_to else None,
+            "hr_last_leave_days": float(a.hr_last_leave_days) if a.hr_last_leave_days else None,
+            "hr_balance_if_approved": float(a.hr_balance_if_approved) if a.hr_balance_if_approved else None,
+            "hr_leave_grant_status": a.hr_leave_grant_status,
+            # Leave Stage 3 (Admin)
+            "admin_granted_from": a.admin_granted_from.isoformat() if a.admin_granted_from else None,
+            "admin_granted_to": a.admin_granted_to.isoformat() if a.admin_granted_to else None,
+            "admin_total_days_approved": float(a.admin_total_days_approved) if a.admin_total_days_approved else None,
+            # Trip Stage 1 (Accountant)
+            "accountant_funds_available": a.accountant_funds_available,
+            "accountant_signed_date": a.accountant_signed_date.isoformat() if a.accountant_signed_date else None,
+            # Trip Stage 2 (HOD)
+            "hod_trip_recommendation": a.hod_trip_recommendation,
+            # Trip Stage 3 (Admin)
+            "admin_trip_approval_details": a.admin_trip_approval_details,
+        }
+        for a in approvals
+    ]
 
 
 @router.get("/admin/my-requests")
@@ -203,7 +296,10 @@ async def get_my_requests(
                 u.first_name,
                 u.surname,
                 u.user_id,
-                r.created_at
+                r.created_at,
+                r.approval_level,
+                r.leave_grant_required,
+                r.contact_address
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
             WHERE r.status = 'pending'
@@ -242,6 +338,9 @@ async def get_my_requests(
             "created_at": created_at.isoformat() if created_at else None,
             "user_id": str(row[7]),
             "user_name": f"{row[5] or ''} {row[6] or ''}".strip(),
+            "approval_level": row[9],
+            "leave_grant_required": row[10],
+            "contact_address": row[11],
         })
 
     return requests
@@ -337,7 +436,10 @@ async def get_admin_pending_requests_list(
                 r.status,
                 u.first_name,
                 u.surname,
-                u.user_id
+                u.user_id,
+                r.approval_level,
+                r.leave_grant_required,
+                r.contact_address
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
             WHERE {' AND '.join(where_clauses)}
@@ -365,7 +467,10 @@ async def get_admin_pending_requests_list(
                 r.status,
                 u.first_name,
                 u.surname,
-                u.user_id
+                u.user_id,
+                r.approval_level,
+                r.leave_grant_required,
+                r.contact_address
             FROM requests r
             JOIN users u ON u.user_id = r.user_id
             WHERE {' AND '.join(where_clauses)}
@@ -408,6 +513,9 @@ async def get_admin_pending_requests_list(
                 "duration": duration,
                 "user_name": full_name,
                 "user_id": str(row[7]),
+                "approval_level": row[8],
+                "leave_grant_required": row[9],
+                "contact_address": row[10],
             }
         )
 
@@ -417,215 +525,201 @@ async def get_admin_pending_requests_list(
 @router.post("/admin/{request_id}/approve")
 async def approve_request(
     request_id: str,
+    payload: ApprovalPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    comment: Optional[str] = None,
 ):
-    req_row = db.execute(text("SELECT user_id, current_approver_id, type, start_date, end_date FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
-    if not req_row:
+    req = db.query(Request).filter(Request.request_id == request_id).first()
+    if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
-    if req_row[1] and str(req_row[1]) != str(current_user.user_id):
+    
+    if req.current_approver_id and str(req.current_approver_id) != str(current_user.user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
-    # Determine next approver in chain
-    user_id = req_row[0]
-    rtype = req_row[2]
-    sd = req_row[3]
-    ed = req_row[4] or req_row[3]
+
+    now = datetime.utcnow()
     next_approver_id = None
-    # Chain: HOD -> HR Admin -> Accountant -> Principal Hospital Administrator
-    # Identify current user's position and pick next by role
-    # Simple role-based ordering
-    role_name = current_user.role.name if current_user.role else ""
-    if role_name and role_name.lower() in ["head of department", "hod"]:
-        hr = db.query(User).join(Role).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
-        next_approver_id = hr.user_id if hr else None
-    elif role_name and role_name.lower() in ["hr admin", "hr"]:
-        accountant = db.query(User).join(Role).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
-        next_approver_id = accountant.user_id if accountant else None
-    elif role_name and role_name.lower() == "accountant":
-        principal = db.query(User).join(Role).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
-        next_approver_id = principal.user_id if principal else None
+    
+    # Create the approval record with common fields
+    approval = RequestApproval(
+        request_id=req.request_id,
+        approver_id=current_user.user_id,
+        action="approved",
+        comment=payload.comment,
+        timestamp=now
+    )
+    
+    # Trip Request Approval Chain (Accountant -> HOD -> Admin)
+    if req.type.lower() == "leave duty station":
+        # Stage 1: Accountant (Section C)
+        if req.approval_level == 1:
+            approval.accountant_funds_available = payload.accountant_funds_available
+            approval.accountant_signed_date = now.date()
+            approval.level = 1
+            req.approval_level = 2
+            
+            # Next: HOD
+            hod = db.query(User).filter(User.department_id == req.user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
+            next_approver_id = hod.user_id if hod else None
+            req.current_approver_id = next_approver_id
+            
+        # Stage 2: HOD (Section D)
+        elif req.approval_level == 2:
+            approval.hod_trip_recommendation = payload.hod_trip_recommendation
+            approval.level = 2
+            req.approval_level = 3
+            
+            # Next: Administrator
+            admin = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+            next_approver_id = admin.user_id if admin else None
+            req.current_approver_id = next_approver_id
+            
+        # Stage 3: Admin (Section E)
+        elif req.approval_level == 3:
+            approval.admin_trip_approval_details = payload.admin_trip_approval_details
+            approval.level = 3
+            req.status = 'approved'
+            req.current_approver_id = None
+            
+    # Standard Leave Request Chain (HOD -> HR -> Admin)
     else:
-        # If initial approver wasn't set or current approver is not in chain, start from HOD
-        hod = db.query(User).filter(User.department_id == current_user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
-        next_approver_id = hod.user_id if hod and hod.user_id != current_user.user_id else None
-    result = None
-    if next_approver_id:
-        result = db.execute(
-            text(
-                """
-                UPDATE requests
-                SET current_approver_id = :next_id,
-                    updated_at = NOW()
-                WHERE request_id = :request_id
-                  AND status = 'pending'
-                  AND deleted_at IS NULL
-                  AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
-                RETURNING request_id
-                """
-            ),
-            {"request_id": request_id, "approver_id": current_user.user_id, "next_id": next_approver_id},
-        ).fetchone()
-    else:
-        result = db.execute(
-            text(
-                """
-                UPDATE requests
-                SET status = 'approved',
-                    current_approver_id = NULL,
-                    updated_at = NOW()
-                WHERE request_id = :request_id
-                  AND status = 'pending'
-                  AND deleted_at IS NULL
-                  AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
-                RETURNING request_id
-                """
-            ),
-            {"request_id": request_id, "approver_id": current_user.user_id},
-        ).fetchone()
-
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Request not found or not eligible for approval",
-        )
-
-    db.commit()
-    # Notify initial approver
-    if approver_id:
-        db.add(Notification(
-            user_id=approver_id,
-            title="New Request Pending",
-            message=f"{payload.type} requires your approval",
-            type="request",
-            is_read=False,
-            created_at=now,
-            updated_at=now
-        ))
-        db.commit()
-        approver_user = db.query(User).filter(User.user_id == approver_id).first()
-        if approver_user and approver_user.fcm_tokens:
-            for tok in approver_user.fcm_tokens:
-                try:
-                    await send_push_notification(
-                        token=tok.fcm_token,
-                        title="New Request Pending",
-                        body=f"{payload.type} requires your approval",
-                        data={"request_id": str(result[0]), "type": "request"}
-                    )
-                except Exception:
-                    pass
-    db.add(RequestApproval(request_id=result[0], approver_id=current_user.user_id, level=1, action="approved", comment=comment, timestamp=datetime.utcnow()))
-    db.commit()
-    # Notify next approver or finalize
-    if next_approver_id:
-        # Get requester details for email
-        requester = db.query(User).filter(User.user_id == user_id).first()
-        
-        # Send email and push notification to next approver
-        next_user = db.query(User).filter(User.user_id == next_approver_id).first()
-        if next_user and next_user.email:
-            try:
-                # Send email notification to next approver
-                await email_service.send_request_reassigned_email(
-                    email=next_user.email,
-                    new_approver_name=f"{next_user.first_name} {next_user.surname}",
-                    requester_name=f"{requester.first_name} {requester.surname}" if requester else "Unknown",
-                    request_type=rtype,
-                    start_date=sd.strftime('%B %d, %Y'),
-                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
-                    previous_approver_name=f"{current_user.first_name} {current_user.surname}"
-                )
-                
-                # Send push notification if next approver has FCM token
-                if hasattr(next_user, 'fcm_token') and next_user.fcm_token:
-                    await send_push_notification(
-                        token=next_user.fcm_token,
-                        title="Request Escalated",
-                        body=f"{rtype} request has been escalated to you for approval",
-                        data={
-                            "type": "request_escalated",
-                            "request_id": request_id,
-                            "request_type": rtype,
-                            "escalated_by": f"{current_user.first_name} {current_user.surname}"
-                        }
-                    )
-            except Exception as e:
-                # Log error but don't fail the approval
-                print(f"Failed to send escalation notification to next approver: {e}")
-        
-        db.add(Notification(
-            user_id=next_approver_id,
-            title="Request Pending Approval",
-            message=f"{rtype} requires your approval",
-            type="request",
-            is_read=False,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        ))
-        db.commit()
-        next_user = db.query(User).filter(User.user_id == next_approver_id).first()
-        if next_user and next_user.fcm_tokens:
-            for tok in next_user.fcm_tokens:
-                try:
-                    await send_push_notification(token=tok.fcm_token, title="Request Pending Approval", body=f"{rtype} requires your approval", data={"request_id": request_id, "type": "request"})
-                except Exception:
-                    pass
-    else:
-        duration = (ed - sd).days + 1
-        if rtype in ["annual_leave", "compassionate_leave", "maternity", "paternity", "unpaid_leave"]:
-            lb = db.query(LeaveBalance).filter(LeaveBalance.user_id == user_id, LeaveBalance.leave_type == rtype).first()
-            if not lb:
-                lb = LeaveBalance(user_id=user_id, leave_type=rtype, allocated_days=0, bonus_days=0, used_days=0, remaining_days=0)
-                db.add(lb)
+        # Stage 1: HOD (Section B)
+        if req.approval_level == 1:
+            approval.hod_recommended_from = payload.hod_recommended_from
+            approval.hod_recommended_to = payload.hod_recommended_to
+            approval.hod_not_recommended_reason = payload.hod_not_recommended_reason
+            approval.level = 1
+            req.approval_level = 2
+            
+            # Next: HR
+            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
+            next_approver_id = hr.user_id if hr else None
+            req.current_approver_id = next_approver_id
+            
+        # Stage 2: HR (Section C)
+        elif req.approval_level == 2:
+            approval.hr_annual_entitlement = payload.hr_annual_entitlement
+            approval.hr_entitlement_taken_from = payload.hr_entitlement_taken_from
+            approval.hr_entitlement_taken_to = payload.hr_entitlement_taken_to
+            approval.hr_last_leave_from = payload.hr_last_leave_from
+            approval.hr_last_leave_to = payload.hr_last_leave_to
+            approval.hr_last_leave_days = payload.hr_last_leave_days
+            approval.hr_balance_if_approved = payload.hr_balance_if_approved
+            approval.hr_leave_grant_status = payload.hr_leave_grant_status
+            approval.level = 2
+            req.approval_level = 3
+            
+            # Next: Administrator
+            admin = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+            next_approver_id = admin.user_id if admin else None
+            req.current_approver_id = next_approver_id
+            
+        # Stage 3: Admin (Section D)
+        elif req.approval_level == 3:
+            approval.admin_granted_from = payload.admin_granted_from
+            approval.admin_granted_to = payload.admin_granted_to
+            approval.admin_total_days_approved = payload.admin_total_days_approved
+            approval.level = 3
+            req.status = 'approved'
+            req.current_approver_id = None
+            
+            # Update Leave Balance
+            duration = payload.admin_total_days_approved or 0
+            if req.type in ["annual_leave", "compassionate_leave", "maternity", "paternity", "unpaid_leave"]:
+                lb = db.query(LeaveBalance).filter(LeaveBalance.user_id == req.user_id, LeaveBalance.leave_type == req.type).first()
+                if not lb:
+                    lb = LeaveBalance(user_id=req.user_id, leave_type=req.type, allocated_days=0, bonus_days=0, used_days=0, remaining_days=0, year=now.year)
+                    db.add(lb)
+                    db.commit()
+                    db.refresh(lb)
+                lb.used_days = (lb.used_days or 0) + duration
+                lb.updated_at = now
                 db.commit()
-                db.refresh(lb)
-            lb.used_days = (lb.used_days or 0) + duration
-            total = (lb.allocated_days or 0) + (lb.bonus_days or 0)
-            lb.remaining_days = max(total - (lb.used_days or 0), 0)
-            lb.updated_at = datetime.utcnow()
+
+    req.updated_at = now
+    db.add(approval)
+    db.commit()
+
+    # Notify next approver or requester
+    requester = db.query(User).filter(User.user_id == req.user_id).first()
+    if next_approver_id:
+        next_user = db.query(User).filter(User.user_id == next_approver_id).first()
+        if next_user:
+            # Send notification to next approver
+            db.add(Notification(
+                user_id=next_approver_id,
+                title="Request Pending Approval",
+                message=f"{req.type} requires your approval",
+                type="request",
+                is_read=False,
+                created_at=now,
+                updated_at=now
+            ))
             db.commit()
-        
-        # Send email and push notification to requester
-        requester = db.query(User).filter(User.user_id == user_id).first()
-        if requester and requester.email:
-            try:
-                # Send email notification to requester
-                await email_service.send_request_approved_email(
-                    email=requester.email,
-                    requester_name=f"{requester.first_name} {requester.surname}",
-                    request_type=rtype,
-                    start_date=sd.strftime('%B %d, %Y'),
-                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
-                    approver_name=f"{current_user.first_name} {current_user.surname}",
-                    comment=comment
-                )
-                
-                # Send push notification if requester has FCM token
-                if hasattr(requester, 'fcm_token') and requester.fcm_token:
-                    await send_push_notification(
-                        token=requester.fcm_token,
-                        title="Request Approved",
-                        body=f"Your {rtype} request for {duration} day(s) has been approved",
-                        data={
-                            "type": "request_approved",
-                            "request_id": request_id,
-                            "request_type": rtype
-                        }
-                    )
-            except Exception as e:
-                # Log error but don't fail the approval
-                print(f"Failed to send approval notification to requester: {e}")
-        
-        db.add(Notification(user_id=user_id, title="Request Approved", message=f"{rtype} approved for {duration} day(s)", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow()))
-        db.commit()
-        user = db.query(User).filter(User.user_id == user_id).first()
-        if user and user.fcm_tokens:
-            for tok in user.fcm_tokens:
+            
+            if next_user.email:
                 try:
-                    await send_push_notification(token=tok.fcm_token, title="Request Approved", body=f"{rtype} approved for {duration} day(s)", data={"request_id": request_id, "type": "request"})
+                    await email_service.send_request_reassigned_email(
+                        email=next_user.email,
+                        new_approver_name=f"{next_user.first_name} {next_user.surname}",
+                        requester_name=f"{requester.first_name} {requester.surname}" if requester else "Unknown",
+                        request_type=req.type,
+                        start_date=req.start_date.strftime('%B %d, %Y'),
+                        end_date=req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
+                        previous_approver_name=f"{current_user.first_name} {current_user.surname}"
+                    )
                 except Exception:
                     pass
+            
+            if next_user.fcm_tokens:
+                for tok in next_user.fcm_tokens:
+                    try:
+                        await send_push_notification(
+                            token=tok.fcm_token,
+                            title="Request Pending Approval",
+                            body=f"{req.type} requires your approval",
+                            data={"request_id": str(req.request_id), "type": "request"}
+                        )
+                    except Exception:
+                        pass
+    else:
+        # Final approval notification to requester
+        if requester:
+            db.add(Notification(
+                user_id=requester.user_id,
+                title="Request Approved",
+                message=f"Your {req.type} request has been approved",
+                type="request",
+                is_read=False,
+                created_at=now,
+                updated_at=now
+            ))
+            db.commit()
+            
+            if requester.email:
+                try:
+                    await email_service.send_request_approved_email(
+                        email=requester.email,
+                        requester_name=f"{requester.first_name} {requester.surname}",
+                        request_type=req.type,
+                        start_date=req.start_date.strftime('%B %d, %Y'),
+                        end_date=req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
+                        approver_name=f"{current_user.first_name} {current_user.surname}",
+                        comment=payload.comment
+                    )
+                except Exception:
+                    pass
+            
+            if requester.fcm_tokens:
+                for tok in requester.fcm_tokens:
+                    try:
+                        await send_push_notification(
+                            token=tok.fcm_token,
+                            title="Request Approved",
+                            body=f"Your {req.type} request has been approved",
+                            data={"request_id": str(req.request_id), "type": "request_approved"}
+                        )
+                    except Exception:
+                        pass
 
     return {"success": True}
 
@@ -783,91 +877,76 @@ async def get_team_requests(
 @router.post("/admin/{request_id}/deny")
 async def deny_request(
     request_id: str,
+    payload: ApprovalPayload,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    comment: Optional[str] = None,
 ):
-    result = db.execute(
-        text(
-            """
-            UPDATE requests
-            SET status = 'denied',
-                updated_at = NOW()
-            WHERE request_id = :request_id
-              AND status = 'pending'
-              AND deleted_at IS NULL
-              AND (current_approver_id IS NULL OR current_approver_id = :approver_id)
-            RETURNING request_id
-            """
-        ),
-        {"request_id": request_id, "approver_id": current_user.user_id},
-    ).fetchone()
+    req = db.query(Request).filter(Request.request_id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+    
+    if req.current_approver_id and str(req.current_approver_id) != str(current_user.user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
 
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Request not found or not eligible for denial",
-        )
+    now = datetime.utcnow()
+    req.status = 'denied'
+    req.updated_at = now
+    req.current_approver_id = None
+    
+    # Create denial record
+    approval = RequestApproval(
+        request_id=req.request_id,
+        approver_id=current_user.user_id,
+        level=req.approval_level,
+        action="denied",
+        comment=payload.comment,
+        timestamp=now
+    )
+    
+    db.add(approval)
+    db.commit()
 
-    db.commit()
-    db.add(RequestApproval(request_id=result[0], approver_id=current_user.user_id, level=1, action="denied", comment=comment, timestamp=datetime.utcnow()))
-    db.commit()
-    req = db.execute(text("SELECT user_id, type, start_date, end_date FROM requests WHERE request_id = :rid"), {"rid": request_id}).fetchone()
-    if req:
-        uid = req[0]
-        rtype = req[1]
-        sd = req[2]
-        ed = req[3] or req[2]
-        
-        # Send email and push notification to requester
-        requester = db.query(User).filter(User.user_id == uid).first()
-        if requester and requester.email:
+    # Send notifications
+    requester = db.query(User).filter(User.user_id == req.user_id).first()
+    if requester:
+        # Send email notification
+        if requester.email:
             try:
-                # Send email notification to requester
                 await email_service.send_request_denied_email(
                     email=requester.email,
                     requester_name=f"{requester.first_name} {requester.surname}",
-                    request_type=rtype,
-                    start_date=sd.strftime('%B %d, %Y'),
-                    end_date=ed.strftime('%B %d, %Y') if ed != sd else None,
+                    request_type=req.type,
+                    start_date=req.start_date.strftime('%B %d, %Y'),
+                    end_date=req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
                     approver_name=f"{current_user.first_name} {current_user.surname}",
-                    comment=comment
+                    comment=payload.comment
                 )
-                
-                # Send push notification if requester has FCM token
-                if hasattr(requester, 'fcm_token') and requester.fcm_token:
-                    await send_push_notification(
-                        token=requester.fcm_token,
-                        title="Request Denied",
-                        body=f"Your {rtype} request has been denied",
-                        data={
-                            "type": "request_denied",
-                            "request_id": request_id,
-                            "request_type": rtype
-                        }
-                    )
-            except Exception as e:
-                # Log error but don't fail the denial
-                print(f"Failed to send denial notification to requester: {e}")
+            except Exception:
+                pass
         
-        n = Notification(user_id=uid, title="Request Denied", message=f"{rtype} denied", type="request", is_read=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
-        db.add(n)
+        # Create in-app notification
+        db.add(Notification(
+            user_id=requester.user_id,
+            title="Request Denied",
+            message=f"Your {req.type} request has been denied",
+            type="request",
+            is_read=False,
+            created_at=now,
+            updated_at=now
+        ))
         db.commit()
-        user = db.query(User).filter(User.user_id == uid).first()
-        if user and user.fcm_tokens:
-            for tok in user.fcm_tokens:
+        
+        # Send push notification
+        if requester.fcm_tokens:
+            for tok in requester.fcm_tokens:
                 try:
-                    await send_push_notification(token=tok.fcm_token, title="Request Denied", body=f"{rtype} denied", data={"request_id": request_id, "type": "request"})
+                    await send_push_notification(
+                        token=tok.fcm_token,
+                        title="Request Denied",
+                        body=f"Your {req.type} request has been denied",
+                        data={"request_id": str(req.request_id), "type": "request_denied"}
+                    )
                 except Exception:
                     pass
-
-@router.get("/{request_id}/approvals")
-async def get_request_approvals(
-    request_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    rows = db.query(RequestApproval).filter(RequestApproval.request_id == request_id).order_by(RequestApproval.timestamp.asc()).all()
-    return [{"approval_id": str(r.approval_id), "approver_id": str(r.approver_id), "level": r.level, "action": r.action, "comment": r.comment, "timestamp": r.timestamp.isoformat() if r.timestamp else None} for r in rows]
 
     return {"success": True}

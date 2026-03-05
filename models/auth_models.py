@@ -26,6 +26,7 @@ class RegisterRequest(BaseModel):
     date_of_employment: str
     designation_id: str
     department_id: str
+    grade_id: Optional[str] = None
     password: str
     confirm_password: str
 
