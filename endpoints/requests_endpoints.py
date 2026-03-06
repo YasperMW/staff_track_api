@@ -325,15 +325,20 @@ async def get_my_requests(
         else:
             date_range = start_date.strftime("%b %d")
         
-        duration = 1
-        if end_date and end_date != start_date:
-            duration = (end_date - start_date).days + 1
+        # Calculate duration - for leave duty station, show "travelling day" instead of duration
+        if row[1].lower() == "leave duty station":
+            duration = "travelling day"
+        else:
+            duration = 1
+            if end_date and end_date != start_date:
+                duration = (end_date - start_date).days + 1
+            duration = f"{duration} day{'s' if duration > 1 else ''}"
         
         requests.append({
             "id": str(row[0]),
             "type": row[1],
             "date_range": date_range,
-            "duration": f"{duration} day{'s' if duration > 1 else ''}",
+            "duration": duration,
             "description": f"{row[1]} request for {duration}",
             "created_at": created_at.isoformat() if created_at else None,
             "user_id": str(row[7]),
@@ -496,11 +501,15 @@ async def get_admin_pending_requests_list(
         else:
             date_range = start_date.strftime("%b %d")
 
-        if end_date and end_date != start_date:
-            duration_days = (end_date - start_date).days + 1
-            duration = f"{duration_days} days"
+        # Calculate duration - for leave duty station, show "travelling day" instead of duration
+        if row[1].lower() == "leave duty station":
+            duration = "travelling day"
         else:
-            duration = "1 day"
+            if end_date and end_date != start_date:
+                duration_days = (end_date - start_date).days + 1
+                duration = f"{duration_days} days"
+            else:
+                duration = "1 day"
 
         full_name = f"{row[5] or ''} {row[6] or ''}".strip()
 
@@ -543,7 +552,7 @@ async def approve_request(
     approval = RequestApproval(
         request_id=req.request_id,
         approver_id=current_user.user_id,
-        action="approved",
+        action="approve",
         comment=payload.comment,
         timestamp=now
     )
@@ -758,11 +767,15 @@ async def get_my_requests(
         else:
             date_range = start_date.strftime("%b %d")
 
-        if end_date and end_date != start_date:
-            duration_days = (end_date - start_date).days + 1
-            duration = f"{duration_days} days"
+        # Calculate duration - for leave duty station, show "travelling day" instead of duration
+        if row[1].lower() == "leave duty station":
+            duration = "travelling day"
         else:
-            duration = "1 day"
+            if end_date and end_date != start_date:
+                duration_days = (end_date - start_date).days + 1
+                duration = f"{duration_days} days"
+            else:
+                duration = "1 day"
 
         requests.append(
             {
@@ -855,15 +868,20 @@ async def get_team_requests(
         else:
             date_range = start_date.strftime("%b %d")
         
-        duration = 1
-        if end_date and end_date != start_date:
-            duration = (end_date - start_date).days + 1
+        # Calculate duration - for leave duty station, show "travelling day" instead of duration
+        if row[1].lower() == "leave duty station":
+            duration = "travelling day"
+        else:
+            duration = 1
+            if end_date and end_date != start_date:
+                duration = (end_date - start_date).days + 1
+            duration = f"{duration} day{'s' if duration > 1 else ''}"
         
         requests.append({
             "id": str(row[0]),
             "type": row[1],
             "date_range": date_range,
-            "duration": f"{duration} day{'s' if duration > 1 else ''}",
+            "duration": duration,
             "description": f"{row[1]} request for {duration}",
             "created_at": created_at.isoformat() if created_at else None,
             "user_id": str(row[7]),
@@ -898,7 +916,7 @@ async def deny_request(
         request_id=req.request_id,
         approver_id=current_user.user_id,
         level=req.approval_level,
-        action="denied",
+        action="deny",
         comment=payload.comment,
         timestamp=now
     )

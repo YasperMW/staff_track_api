@@ -299,7 +299,7 @@ class Request(Base):
 
 class RequestApproval(Base):
     __tablename__ = "request_approvals"
-    approval_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    approval_id = Column("request_approval_id", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     request_id = Column(UUID(as_uuid=True), ForeignKey("requests.request_id"), nullable=False)
     approver_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     level = Column(Integer, default=1)
