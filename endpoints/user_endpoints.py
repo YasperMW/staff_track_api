@@ -163,9 +163,37 @@ def verify_admin_role(token: str) -> bool:
         
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
-        return user_role in ["admin", "administrator", "hr", "manager"]
+        return user_role in ["admin", "administrator", "hr", "manager", "doctor", "nurse", "clinical_officer", "support_staff", "department_supervisor", "medical_director", "System Admin"]
     except:
         return False
+
+@router.get("/debug-token")
+async def debug_token(
+    token: Optional[str] = Depends(get_token_from_bearer)
+):
+    """
+    Debug endpoint to check token payload
+    """
+    if not token:
+        return {"error": "No token provided"}
+    
+    try:
+        import jwt
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+        ALGORITHM = os.getenv("ALGORITHM", "HS256")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return {
+            "payload": payload,
+            "role": payload.get("role"),
+            "is_admin": verify_admin_role(token)
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 @router.get("/test")
 async def test_endpoint():
@@ -453,8 +481,8 @@ async def get_all_users(
         )
     
     try:
-        # Query all users including their roles and departments
-        users = db.query(User).join(Role).outerjoin(Department).all()
+        # Query all users including their roles and departments with explicit join conditions
+        users = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).all()
         
         user_responses = []
         for user in users:
@@ -478,7 +506,7 @@ async def get_all_users(
                 spouse_name=user.spouse_name,
                 spouse_contact=user.spouse_contact,
                 date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
-                designation=user.designation,
+                designation=user.designation.name if user.designation else None,
                 department_id=str(user.department_id) if user.department_id else None,
                 is_head_of_department=user.is_head_of_department,
                 phone=user.phone,
@@ -533,10 +561,12 @@ async def get_active_users(
         )
     
     try:
-        # Query only active users (not deleted)
-        users = db.query(User).join(Role).outerjoin(Department).filter(
+        # Query only active users (not deleted) with explicit join conditions
+        users = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).filter(
             User.deleted_at.is_(None)
         ).all()
+        
+        print(f"Query executed successfully, found {len(users)} users")
         
         user_responses = []
         for user in users:
@@ -560,7 +590,7 @@ async def get_active_users(
                 spouse_name=user.spouse_name,
                 spouse_contact=user.spouse_contact,
                 date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
-                designation=user.designation,
+                designation=user.designation.name if user.designation else None,
                 department_id=str(user.department_id) if user.department_id else None,
                 is_head_of_department=user.is_head_of_department,
                 phone=user.phone,
@@ -644,7 +674,7 @@ async def get_users_by_department(
                 spouse_name=user.spouse_name,
                 spouse_contact=user.spouse_contact,
                 date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
-                designation=user.designation,
+                designation=user.designation.name if user.designation else None,
                 department_id=str(user.department_id) if user.department_id else None,
                 is_head_of_department=user.is_head_of_department,
                 phone=user.phone,

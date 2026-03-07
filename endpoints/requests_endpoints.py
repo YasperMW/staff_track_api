@@ -61,6 +61,130 @@ class ApprovalPayload(BaseModel):
     admin_trip_approval_details: Optional[str] = None
 
 
+@router.get("")
+async def get_all_requests(
+    status_filter: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get all requests with optional filtering and pagination
+    """
+    print(f"Get all requests called by user: {current_user.user_id}, role: {current_user.role}")
+    
+    # Check if user is admin/HR to see all requests
+    is_admin = current_user.role and current_user.role.name.lower() in ['admin', 'administrator', 'hr', 'system admin', 'principal hospital administrator']
+    
+    where_clauses = ["r.deleted_at IS NULL"]
+    params = {}
+    
+    # For non-admin users, only show their own requests
+    if not is_admin:
+        where_clauses.append("r.user_id = :user_id")
+        params["user_id"] = current_user.user_id
+    
+    # Status filter
+    if status_filter and status_filter.lower() in ["pending", "approved", "rejected", "denied"]:
+        where_clauses.append("r.status = :status")
+        params["status"] = status_filter.lower()
+    
+    # Type filter
+    if type_filter:
+        where_clauses.append("LOWER(r.type) LIKE :type")
+        params["type"] = f"%{type_filter.lower()}%"
+    
+    query = f"""
+        SELECT 
+            r.request_id,
+            r.type,
+            r.start_date,
+            r.end_date,
+            r.status,
+            r.created_at,
+            r.updated_at,
+            u.first_name,
+            u.surname,
+            u.user_id,
+            u.employee_number,
+            d.name as department_name,
+            r.leave_grant_required,
+            r.contact_address,
+            r.reason_for_leaving,
+            r.travel_place
+        FROM requests r
+        JOIN users u ON u.user_id = r.user_id
+        LEFT JOIN departments d ON d.department_id = u.department_id
+        WHERE {' AND '.join(where_clauses)}
+    """
+    
+    sort_map = {
+        "created_at": "r.created_at", 
+        "start_date": "r.start_date", 
+        "end_date": "r.end_date",
+        "type": "r.type",
+        "status": "r.status"
+    }
+    sort_col = sort_map.get((sort_by or "created_at").lower(), "r.created_at")
+    sort_dir = "ASC" if (sort_order or "desc").lower() == "asc" else "DESC"
+    limit = max(1, min(page_size, 200))
+    offset = max(0, (max(1, page) - 1) * limit)
+    
+    query = f"{query} ORDER BY {sort_col} {sort_dir} LIMIT :limit OFFSET :offset"
+    params.update({"limit": limit, "offset": offset})
+    
+    result = db.execute(text(query), params).fetchall()
+    print(f"Found {len(result)} requests for user {current_user.user_id}")
+    
+    requests = []
+    
+    for row in result:
+        start_date = row[2]
+        end_date = row[3]
+        created_at = row[5]
+        updated_at = row[6]
+        
+        # Calculate duration
+        if end_date and end_date != start_date:
+            duration_days = (end_date - start_date).days + 1
+            duration = duration_days
+        else:
+            duration = 1
+        
+        # Determine request title and description
+        request_type = row[1]
+        if request_type.lower() == "leave duty station":
+            title = "Travel Request"
+            description = row[14] or f"Travel to {row[14] or 'destination'}"
+        else:
+            title = f"{request_type} Request"
+            description = f"{request_type} request for {duration} day{'s' if duration > 1 else ''}"
+        
+        requests.append({
+            "id": str(row[0]),
+            "user_id": str(row[9]),
+            "user_name": f"{row[7] or ''} {row[8] or ''}".strip(),
+            "employee_number": row[10] or "",
+            "department": row[11] or "Unknown",
+            "type": request_type.lower().replace(" ", "_"),
+            "status": row[4].lower(),
+            "title": title,
+            "description": description,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date and end_date != start_date else None,
+            "duration": duration,
+            "reason": row[12] or row[13] or None,
+            "created_at": created_at.isoformat() if created_at else None,
+            "updated_at": updated_at.isoformat() if updated_at else None,
+        })
+    
+    return {"requests": requests}
+
+
 @router.get("/summary")
 async def get_requests_summary(
     db: Session = Depends(get_db),
@@ -963,6 +1087,113 @@ async def deny_request(
                         title="Request Denied",
                         body=f"Your {req.type} request has been denied",
                         data={"request_id": str(req.request_id), "type": "request_denied"}
+                    )
+                except Exception:
+                    pass
+
+    return {"success": True}
+
+
+class SimpleApprovalPayload(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.put("/{request_id}/approve")
+async def simple_approve_request(
+    request_id: str,
+    payload: SimpleApprovalPayload = SimpleApprovalPayload(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Simple approve endpoint for frontend compatibility
+    """
+    # Use the existing approve endpoint logic but with simplified payload
+    approval_payload = ApprovalPayload(comment=payload.reason)
+    
+    # Call the existing approve function
+    return await approve_request(request_id, approval_payload, db, current_user)
+
+
+@router.put("/{request_id}/reject")
+async def simple_reject_request(
+    request_id: str,
+    payload: SimpleApprovalPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Simple reject endpoint for frontend compatibility
+    """
+    req = db.query(Request).filter(Request.request_id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+    
+    if req.current_approver_id and str(req.current_approver_id) != str(current_user.user_id):
+        # Allow admins to reject any request
+        is_admin = current_user.role and current_user.role.name.lower() in ['admin', 'administrator', 'hr', 'system admin', 'principal hospital administrator']
+        if not is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
+
+    now = datetime.utcnow()
+    
+    # Create rejection approval record
+    approval = RequestApproval(
+        request_id=req.request_id,
+        approver_id=current_user.user_id,
+        action="reject",
+        comment=payload.reason,
+        timestamp=now,
+        level=req.approval_level
+    )
+    
+    # Update request status
+    req.status = 'rejected'
+    req.current_approver_id = None
+    req.updated_at = now
+    
+    db.add(approval)
+    db.commit()
+
+    # Send notifications
+    requester = db.query(User).filter(User.user_id == req.user_id).first()
+    if requester:
+        # Send email notification
+        if requester.email:
+            try:
+                await email_service.send_request_denied_email(
+                    email=requester.email,
+                    requester_name=f"{requester.first_name} {requester.surname}",
+                    request_type=req.type,
+                    start_date=req.start_date.strftime('%B %d, %Y'),
+                    end_date=req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
+                    approver_name=f"{current_user.first_name} {current_user.surname}",
+                    comment=payload.reason
+                )
+            except Exception:
+                pass
+        
+        # Create in-app notification
+        db.add(Notification(
+            user_id=requester.user_id,
+            title="Request Rejected",
+            message=f"Your {req.type} request has been rejected",
+            type="request",
+            is_read=False,
+            created_at=now,
+            updated_at=now
+        ))
+        db.commit()
+        
+        # Send push notification
+        if requester.fcm_tokens:
+            for tok in requester.fcm_tokens:
+                try:
+                    await send_push_notification(
+                        token=tok.fcm_token,
+                        title="Request Rejected",
+                        body=f"Your {req.type} request has been rejected",
+                        data={"request_id": str(req.request_id), "type": "request_rejected"}
                     )
                 except Exception:
                     pass

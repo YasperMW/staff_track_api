@@ -765,6 +765,170 @@ async def get_team_today_list(
     return result
 
 
+@router.get("/team/today/summary")
+async def get_team_today_summary_v2(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Team today summary endpoint with forward slashes - returns data in frontend format"""
+    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    
+    if current_user.department_id:
+        staff_query = staff_query.filter(User.department_id == current_user.department_id)
+    
+    staff = staff_query.all()
+    
+    if not staff:
+        return {
+            "total_staff": 0,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "total_work_hours": 0
+        }
+    
+    staff_ids = [u.user_id for u in staff]
+    
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    logs = (
+        db.query(AttendanceLog)
+        .filter(
+            AttendanceLog.user_id.in_(staff_ids),
+            AttendanceLog.check_in_time >= today_start,
+            AttendanceLog.check_in_time <= today_end,
+        )
+        .order_by(AttendanceLog.user_id, AttendanceLog.check_in_time)
+        .all()
+    )
+    
+    earliest_by_user = {}
+    total_work_hours = 0
+    
+    for log in logs:
+        uid = log.user_id
+        if uid not in earliest_by_user or log.check_in_time < earliest_by_user[uid]:
+            earliest_by_user[uid] = log
+        
+        # Calculate work hours for completed shifts
+        if log.check_out_time:
+            work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
+            total_work_hours += work_hours
+    
+    present_count = len(earliest_by_user)
+    late_count = 0
+    
+    for dt in earliest_by_user.values():
+        if dt.hour >= 9:
+            late_count += 1
+    
+    total_staff = len(staff)
+    absent_count = total_staff - present_count
+    
+    return {
+        "total_staff": total_staff,
+        "present": present_count,
+        "absent": absent_count,
+        "late": late_count,
+        "total_work_hours": round(total_work_hours, 2)
+    }
+
+
+@router.get("/team/today/list")
+async def get_team_today_list_v2(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Team today list endpoint with forward slashes - returns data in frontend format"""
+    from models.db_models import Department
+    
+    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    
+    if current_user.department_id:
+        staff_query = staff_query.filter(User.department_id == current_user.department_id)
+    
+    # Join with department to get department name
+    staff_query = staff_query.outerjoin(Department, User.department_id == Department.department_id)
+    
+    staff = staff_query.all()
+    
+    if not staff:
+        return {"staff": []}
+    
+    staff_ids = [u.user_id for u in staff]
+    
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    logs = (
+        db.query(AttendanceLog)
+        .filter(
+            AttendanceLog.user_id.in_(staff_ids),
+            AttendanceLog.check_in_time >= today_start,
+            AttendanceLog.check_in_time <= today_end,
+        )
+        .order_by(AttendanceLog.user_id, AttendanceLog.check_in_time)
+        .all()
+    )
+    
+    earliest_log_by_user = {}
+    latest_checkout_by_user = {}
+    
+    for log in logs:
+        uid = log.user_id
+        if log.check_in_time:
+            if uid not in earliest_log_by_user or log.check_in_time < earliest_log_by_user[uid].check_in_time:
+                earliest_log_by_user[uid] = log
+        if log.check_out_time:
+            existing = latest_checkout_by_user.get(uid)
+            if existing is None or log.check_out_time > existing:
+                latest_checkout_by_user[uid] = log.check_out_time
+    
+    staff_list = []
+    
+    for user in staff:
+        log = earliest_log_by_user.get(user.user_id)
+        check_in_time_str = None
+        check_out_time_str = None
+        status = "Absent"
+        shift_type = None
+        
+        if log and log.check_in_time:
+            check_in_time = log.check_in_time
+            hour = check_in_time.hour
+            status = "Late" if hour >= 9 else "Present"
+            check_in_time_str = check_in_time.isoformat()
+            shift_type = log.shift_type
+        
+        checkout_dt = latest_checkout_by_user.get(user.user_id)
+        if checkout_dt:
+            check_out_time_str = checkout_dt.isoformat()
+        
+        # Get department name from the joined department
+        department_name = "Unknown"
+        if hasattr(user, 'department') and user.department:
+            department_name = user.department.name
+        elif hasattr(user, '_Department') and user._Department:
+            department_name = user._Department.name
+        
+        staff_list.append({
+            "user_id": str(user.user_id),
+            "first_name": user.first_name or "",
+            "surname": user.surname or "",
+            "employee_number": user.employee_number or "",
+            "department": {
+                "name": department_name
+            },
+            "check_in_time": check_in_time_str,
+            "check_out_time": check_out_time_str,
+            "status": status,
+            "shift_type": shift_type,
+        })
+    
+    return {"staff": staff_list}
+
+
 @router.get("/department-overview")
 async def get_department_overview(
     db: Session = Depends(get_db),
