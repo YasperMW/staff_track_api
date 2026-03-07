@@ -49,6 +49,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from endpoints.holidays_endpoints import fetch_public_holidays
+from attendance_scheduler import attendance_scheduler
 
 HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
 HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
@@ -64,10 +65,24 @@ async def _holidays_sync_loop():
             pass
         await asyncio.sleep(24 * 60 * 60)
 
+async def _attendance_scheduler_loop():
+    """Run attendance reminder checks every minute"""
+    while True:
+        try:
+            # Check if it's time for check-in reminders (7:30 AM) or check-out reminders (4:00 PM)
+            await attendance_scheduler.send_check_in_reminders()
+            await attendance_scheduler.send_check_out_reminders()
+        except Exception as e:
+            print(f"Error in attendance scheduler: {e}")
+        # Check every minute
+        await asyncio.sleep(60)
+
 @app.on_event("startup")
 async def _startup():
     if HOLIDAYS_SYNC_ENABLED:
         asyncio.create_task(_holidays_sync_loop())
+    # Start attendance scheduler
+    asyncio.create_task(_attendance_scheduler_loop())
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
