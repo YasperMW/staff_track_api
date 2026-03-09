@@ -7,17 +7,45 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Initialize Firebase Admin SDK
-# You should place your service account key file in the root of the api directory
-# and set the FIREBASE_SERVICE_ACCOUNT_PATH environment variable
-service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "serviceAccountKey.json")
+# You can either set FIREBASE_SERVICE_ACCOUNT_PATH to point to a JSON file
+# or set individual environment variables for the credentials
+def get_firebase_credentials():
+    # Try environment variables first
+    project_id = os.getenv("FIREBASE_PROJECT_ID")
+    private_key_id = os.getenv("FIREBASE_PRIVATE_KEY_ID")
+    private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+    client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+    client_id = os.getenv("FIREBASE_CLIENT_ID")
+    auth_uri = os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth")
+    token_uri = os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token")
+    
+    if all([project_id, private_key_id, private_key, client_email, client_id]):
+        # Use environment variables
+        cred_dict = {
+            "type": "service_account",
+            "project_id": project_id,
+            "private_key_id": private_key_id,
+            "private_key": private_key.replace("\\n", "\n"),
+            "client_email": client_email,
+            "client_id": client_id,
+            "auth_uri": auth_uri,
+            "token_uri": token_uri
+        }
+        return credentials.Certificate(cred_dict)
+    else:
+        # Fall back to file-based approach
+        service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "serviceAccountKey.json")
+        if os.path.exists(service_account_path):
+            return credentials.Certificate(service_account_path)
+        return None
 
 try:
-    if os.path.exists(service_account_path):
-        cred = credentials.Certificate(service_account_path)
+    cred = get_firebase_credentials()
+    if cred:
         firebase_admin.initialize_app(cred)
         logger.info("Firebase Admin SDK initialized successfully")
     else:
-        logger.warning(f"Firebase service account key not found at {service_account_path}. FCM will not work.")
+        logger.warning("Firebase credentials not found. FCM will not work.")
 except Exception as e:
     logger.error(f"Error initializing Firebase Admin SDK: {e}")
 
