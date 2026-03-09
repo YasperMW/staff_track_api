@@ -250,13 +250,17 @@ class NotificationService:
                     UserFCMToken.user_id == user_id
                 ).all()
                 
+                # Add navigation data to the push notification
+                navigation_data = NotificationService._get_navigation_data(notification_type, data)
+                push_data = {**(data or {}), **navigation_data}
+                
                 for token_record in fcm_tokens:
                     try:
                         await send_push_notification(
                             token=token_record.fcm_token,
                             title=title,
                             body=message,
-                            data=data or {}
+                            data=push_data
                         )
                         notifications_sent.append("push")
                         logger.info(f"Push notification sent to user {user_id}")
@@ -393,6 +397,37 @@ class NotificationService:
         db.commit()
         logger.info(f"Updated notification preference for user {user_id}, category {category}")
     
+    @staticmethod
+    def _get_navigation_data(notification_type: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        """Generate navigation data based on notification type"""
+        navigation_data = {"type": notification_type}
+        
+        if notification_type in ['attendance_reminder', 'check_in_reminder', 'check_out_reminder']:
+            navigation_data["screen"] = "check_in_out"
+        elif notification_type in ['request_submitted', 'request_approved', 'request_denied', 'request_escalated']:
+            navigation_data["screen"] = "requests"
+        elif notification_type in ['announcement', 'urgent_announcement', 'policy_announcement']:
+            navigation_data["screen"] = "announcements"
+        elif notification_type in ['geofence_violation', 'security_alert']:
+            navigation_data["screen"] = "attendance"
+        elif notification_type in ['leave_policy_update', 'policy_change']:
+            navigation_data["screen"] = "announcements"
+        elif notification_type in ['system_update', 'maintenance', 'account_update']:
+            navigation_data["screen"] = "notifications"
+        else:
+            navigation_data["screen"] = "notifications"
+        
+        # Add any additional IDs from the data
+        if data:
+            if "request_id" in data:
+                navigation_data["id"] = data["request_id"]
+            elif "announcement_id" in data:
+                navigation_data["id"] = data["announcement_id"]
+            elif "attendance_id" in data:
+                navigation_data["id"] = data["attendance_id"]
+        
+        return navigation_data
+
     @staticmethod
     def get_notification_stats(db: Session, user_id: str, hours: int = 24) -> Dict[str, Any]:
         """Get notification statistics for a user"""
