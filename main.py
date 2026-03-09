@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints
 from database import engine
 from models.db_models import Base
@@ -13,10 +14,58 @@ load_dotenv()
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    import asyncio
+    from datetime import datetime
+    from fastapi import BackgroundTasks
+    from sqlalchemy.orm import Session
+    from database import SessionLocal
+    from endpoints.holidays_endpoints import fetch_public_holidays
+    from attendance_scheduler import attendance_scheduler
+
+    HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
+    HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
+
+    async def _holidays_sync_loop():
+        while True:
+            try:
+                year = datetime.now().year
+                with SessionLocal() as db:
+                    # Run fetch; de-dup handled inside
+                    await fetch_public_holidays(year=year, country_code=HOLIDAYS_SYNC_COUNTRY, db=db)  # type: ignore
+            except Exception:
+                pass
+            await asyncio.sleep(24 * 60 * 60)
+
+    async def _attendance_scheduler_loop():
+        """Run attendance reminder checks every minute"""
+        while True:
+            try:
+                # Check if it's time for check-in reminders (7:30 AM) or check-out reminders (4:00 PM)
+                await attendance_scheduler.send_check_in_reminders()
+                await attendance_scheduler.send_check_out_reminders()
+            except Exception as e:
+                print(f"Error in attendance scheduler: {e}")
+            # Check every minute
+            await asyncio.sleep(60)
+
+    if HOLIDAYS_SYNC_ENABLED:
+        asyncio.create_task(_holidays_sync_loop())
+    # Start attendance scheduler
+    asyncio.create_task(_attendance_scheduler_loop())
+    
+    yield
+    
+    # Shutdown (if needed)
+    pass
+
 app = FastAPI(
     title="Staff Track API",
     description="API for Staff Track Hospital Management System",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Configure CORS
@@ -42,47 +91,6 @@ app.include_router(holidays_endpoints.router, prefix="/api/holidays", tags=["hol
 app.include_router(leave_endpoints.router, prefix="/api", tags=["leave"])
 app.include_router(leave_policy_endpoints.router, tags=["leave"])
 app.include_router(notification_preferences_endpoints.router, tags=["notification-preferences"])
-
-import asyncio
-from datetime import datetime
-from fastapi import BackgroundTasks
-from sqlalchemy.orm import Session
-from database import SessionLocal
-from endpoints.holidays_endpoints import fetch_public_holidays
-from attendance_scheduler import attendance_scheduler
-
-HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
-HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
-
-async def _holidays_sync_loop():
-    while True:
-        try:
-            year = datetime.now().year
-            with SessionLocal() as db:
-                # Run fetch; de-dup handled inside
-                await fetch_public_holidays(year=year, country_code=HOLIDAYS_SYNC_COUNTRY, db=db)  # type: ignore
-        except Exception:
-            pass
-        await asyncio.sleep(24 * 60 * 60)
-
-async def _attendance_scheduler_loop():
-    """Run attendance reminder checks every minute"""
-    while True:
-        try:
-            # Check if it's time for check-in reminders (7:30 AM) or check-out reminders (4:00 PM)
-            await attendance_scheduler.send_check_in_reminders()
-            await attendance_scheduler.send_check_out_reminders()
-        except Exception as e:
-            print(f"Error in attendance scheduler: {e}")
-        # Check every minute
-        await asyncio.sleep(60)
-
-@app.on_event("startup")
-async def _startup():
-    if HOLIDAYS_SYNC_ENABLED:
-        asyncio.create_task(_holidays_sync_loop())
-    # Start attendance scheduler
-    asyncio.create_task(_attendance_scheduler_loop())
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
