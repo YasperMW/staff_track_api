@@ -31,11 +31,7 @@ async def upload_profile_photo(file: UploadFile = File(...)):
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             await f.write(content)
-        schema = os.getenv("API_SCHEMA", "http")
-        host = os.getenv("API_HOST", "127.0.0.1")
-        port = os.getenv("API_PORT", "8888")
-        base_url = f"{schema}://{host}:{port}"
-        file_url = f"{base_url}/uploads/profile_photos/{unique_filename}"
+        file_url = f"uploads/profile_photos/{unique_filename}"
         return JSONResponse({
             "success": True,
             "message": "Profile photo uploaded successfully",
@@ -82,11 +78,7 @@ async def upload_employee_file(
             if size_mb > max_mb:
                 raise HTTPException(status_code=400, detail="File too large")
             await f.write(content)
-        schema = os.getenv("API_SCHEMA", "http")
-        host = os.getenv("API_HOST", "127.0.0.1")
-        port = os.getenv("API_PORT", "8888")
-        base_url = f"{schema}://{host}:{port}"
-        file_url = f"{base_url}/uploads/employee_files/{unique_filename}"
+        file_url = f"uploads/employee_files/{unique_filename}"
         rec = EmployeeFile(user_id=current_user.user_id, file_type=file_type, file_url=file_url, upload_date=datetime.utcnow())
         db.add(rec)
         db.commit()
