@@ -5,6 +5,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from database import get_db
 from models.db_models import User, Role, Department
+from datetime import datetime
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)

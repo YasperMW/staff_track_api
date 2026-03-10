@@ -7,21 +7,14 @@ import asyncio
 import logging
 from datetime import datetime, time, timedelta
 from typing import List
-import pytz
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, text
 from database import get_db
 from models.db_models import User, UserFCMToken, Notification, AttendanceLog
 from fcm_service import send_push_notification
+from timezone_config import get_current_time, get_day_start, get_day_end
 
 logger = logging.getLogger(__name__)
-
-# Define timezone (same as attendance_endpoints.py)
-TIMEZONE = pytz.timezone('Africa/Blantyre')
-
-def get_current_time():
-    """Get current timezone-aware datetime"""
-    return datetime.now(TIMEZONE)
 
 class AttendanceScheduler:
     """Service for scheduling attendance-related notifications"""
@@ -43,8 +36,8 @@ class AttendanceScheduler:
             
             try:
                 # Get all active users who haven't checked in today
-                today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+                today_start = get_day_start(current_time)
+                today_end = get_day_end(current_time)
                 
                 # Find users who haven't checked in today
                 checked_in_user_ids = db.query(AttendanceLog.user_id).filter(

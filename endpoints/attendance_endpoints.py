@@ -6,7 +6,6 @@ from typing import Optional
 from pydantic import BaseModel
 import os
 import math
-import pytz
 from geoalchemy2 import WKTElement
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
@@ -14,15 +13,9 @@ from models.db_models import User, AttendanceLog, Notification, Role, AuditLog
 from models.auth_models import CheckInRequest, CheckOutRequest
 from fcm_service import send_push_notification
 from mail_service import email_service
+from timezone_config import get_current_time, to_app_timezone, to_utc, timezone_aware, get_day_start, get_day_end, get_year_start
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
-
-# Define timezone for consistent datetime handling
-TIMEZONE = pytz.timezone('Africa/Blantyre')  # Adjust to your timezone
-
-def get_current_time():
-    """Get current timezone-aware datetime"""
-    return datetime.now(TIMEZONE)
 
 @router.get("/my-profile-metrics")
 async def get_my_profile_metrics(

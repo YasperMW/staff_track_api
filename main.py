@@ -7,6 +7,8 @@ from database import engine
 from models.db_models import Base
 import os
 from dotenv import load_dotenv
+from timezone_config import APP_TIMEZONE, get_current_time
+from timezone_middleware import add_timezone_middleware
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +26,10 @@ async def lifespan(app: FastAPI):
     from database import SessionLocal
     from endpoints.holidays_endpoints import fetch_public_holidays
     from attendance_scheduler import attendance_scheduler
+
+    # Initialize timezone configuration
+    print(f"🌍 Staff Track API initialized with timezone: {APP_TIMEZONE.zone}")
+    print(f"📅 Current time in {APP_TIMEZONE.zone}: {get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
     HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
     HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
@@ -67,6 +73,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Add timezone middleware
+add_timezone_middleware(app)
 
 # Configure CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")

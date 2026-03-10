@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from mail_service import email_service
 from notification_service import NotificationService
+from timezone_config import get_current_time, to_utc
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -59,10 +60,12 @@ def verify_password(password: str, hashed: str) -> bool:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = get_current_time() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+        expire = get_current_time() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Convert to UTC for JWT (which expects UTC)
+    expire_utc = to_utc(expire)
+    to_encode.update({"exp": expire_utc})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -82,7 +85,7 @@ def create_otp_record(db: Session, email: str, purpose: str) -> str:
     
     # Generate new OTP
     otp_code = generate_otp_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=email_service.otp_expiry_minutes)
+    expires_at = get_current_time() + timedelta(minutes=email_service.otp_expiry_minutes)
     
     # Create OTP record
     otp_record = EmailVerification(
@@ -90,8 +93,8 @@ def create_otp_record(db: Session, email: str, purpose: str) -> str:
         otp_code=otp_code,
         purpose=purpose,
         expires_at=expires_at,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=get_current_time(),
+        updated_at=get_current_time()
     )
     
     db.add(otp_record)
@@ -107,7 +110,7 @@ def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> boo
         EmailVerification.otp_code == otp_code,
         EmailVerification.purpose == purpose,
         EmailVerification.is_used == False,
-        EmailVerification.expires_at > datetime.utcnow()
+        EmailVerification.expires_at > get_current_time()
     ).first()
     
     if not otp_record:
@@ -120,14 +123,14 @@ def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> boo
         
         if recent_otp:
             recent_otp.attempts += 1
-            recent_otp.updated_at = datetime.utcnow()
+            recent_otp.updated_at = get_current_time()
             db.commit()
         
         return False
     
     # Mark OTP as used
     otp_record.is_used = True
-    otp_record.updated_at = datetime.utcnow()
+    otp_record.updated_at = get_current_time()
     db.commit()
     
     return True
@@ -146,7 +149,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             )
         
         # Update last login
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = to_utc(get_current_time())
         db.commit()
         db.refresh(user)
         dept_name = user.department.name if user.department else ""
@@ -270,9 +273,9 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         password_hash=hashed_password,
         profile_photo_url=request.profile_photo_url,
         status="pending",  # User starts as pending until email verification
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-        registration_timestamp=datetime.utcnow()
+        created_at=get_current_time(),
+        updated_at=get_current_time(),
+        registration_timestamp=to_utc(get_current_time())
     )
     
     db.add(new_user)
@@ -464,7 +467,7 @@ async def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
             user = db.query(User).filter(User.email == request.email).first()
             if user:
                 user.status = "active"
-                user.updated_at = datetime.utcnow()
+                user.updated_at = get_current_time()
                 db.commit()
                 
                 # Create default notification preferences for the user
@@ -505,7 +508,7 @@ async def resend_otp(request: OTPRequest, db: Session = Depends(get_db)):
             EmailVerification.email == request.email,
             EmailVerification.purpose == request.purpose,
             EmailVerification.is_used == False,
-            EmailVerification.created_at > datetime.utcnow() - timedelta(minutes=1)
+            EmailVerification.created_at > get_current_time() - timedelta(minutes=1)
         ).first()
         
         if recent_otp:
