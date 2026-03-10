@@ -110,6 +110,8 @@ class CompleteUserProfileResponse(BaseModel):
     role_name: str
     department_name: Optional[str]
     designation_name: Optional[str]
+    grade_id: Optional[str]
+    grade_name: Optional[str]
 
     class Config:
         from_attributes = True
@@ -359,6 +361,7 @@ async def get_complete_user_profile(
         role_name = user.role.name if user.role else "Unknown"
         department_name = user.department.name if user.department else None
         designation_name = user.designation.name if user.designation else None
+        grade_name = user.grade.name if user.grade else None
         
         # Return complete user profile data
         profile_data = {
@@ -399,7 +402,9 @@ async def get_complete_user_profile(
             "deleted_by": str(user.deleted_by) if user.deleted_by else None,
             "role_name": role_name,
             "department_name": department_name,
-            "designation_name": designation_name
+            "designation_name": designation_name,
+            "grade_id": str(user.grade_id) if user.grade_id else None,
+            "grade_name": grade_name
         }
         print(f"Complete profile response data prepared with {len([k for k, v in profile_data.items() if v is not None])} fields")
         return CompleteUserProfileResponse(**profile_data)
