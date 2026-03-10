@@ -29,7 +29,7 @@ async def get_my_profile_metrics(
     - leave_used: total approved leave days in the year (inclusive)
     """
     now = get_current_time()
-    year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    year_start = get_year_start(now)
     next_year_start = year_start.replace(year=year_start.year + 1)
 
     logs = (
@@ -49,10 +49,7 @@ async def get_my_profile_metrics(
             continue
         dt = log.check_in_time
         # Normalize to configured timezone
-        if dt.tzinfo is not None:
-            dt_local = dt.astimezone(TIMEZONE)
-        else:
-            dt_local = TIMEZONE.localize(dt)
+        dt_local = to_app_timezone(dt)
         d = dt_local.date()
         if d not in earliest_by_day or dt_local < earliest_by_day[d]:
             earliest_by_day[d] = dt_local
@@ -106,6 +103,8 @@ async def check_in(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """Check in the current user"""
+    current_time = get_current_time()
     """Check in current user"""
     
     # Extract data from request
@@ -256,8 +255,8 @@ async def check_in(
                         message=f"Check-in location was {dist - rad:.0f}m outside work area",
                         type="security",
                         is_read=False,
-                        created_at=current_time,
-                        updated_at=current_time
+                        created_at=to_utc(current_time),
+                        updated_at=to_utc(current_time)
                     )
                     db.add(notification)
                     db.commit()
@@ -295,13 +294,13 @@ async def check_in(
     # Create attendance log
     attendance = AttendanceLog(
         user_id=current_user.user_id,
-        check_in_time=current_time,  # Use timezone-aware datetime
+        check_in_time=to_utc(current_time),  # Store as UTC
         location=location_geo,  # Use PostGIS geography object
         accuracy=accuracy,
         device_id=device_id,
         shift_type=shift_type,
-        created_at=current_time,  # Use timezone-aware datetime
-        updated_at=current_time   # Use timezone-aware datetime
+        created_at=to_utc(current_time),  # Store as UTC
+        updated_at=to_utc(current_time)   # Store as UTC
     )
     
     print(f"DEBUG: About to save attendance record:")
@@ -370,6 +369,8 @@ async def check_out(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """Check out the current user"""
+    current_time = get_current_time()
     """Check out the current user"""
     
     # Extract data from request
@@ -550,8 +551,8 @@ async def check_out(
         attendance.device_id = device_id
     
     # Update check out time
-    attendance.check_out_time = current_time  # Use timezone-aware datetime
-    attendance.updated_at = current_time   # Use timezone-aware datetime
+    attendance.check_out_time = to_utc(current_time)  # Store as UTC
+    attendance.updated_at = to_utc(current_time)   # Store as UTC
     
     # Determine final shift type based on check-in and check-out times
     check_in_hour = attendance.check_in_time.hour
@@ -720,7 +721,7 @@ async def get_attendance_history(
     
     if start_date:
         try:
-            start_dt = TIMEZONE.localize(datetime.strptime(start_date, "%Y-%m-%d"))
+            start_dt = get_day_start(datetime.strptime(start_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time >= start_dt)
         except ValueError:
             raise HTTPException(
@@ -730,7 +731,7 @@ async def get_attendance_history(
     
     if end_date:
         try:
-            end_dt = TIMEZONE.localize(datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999))
+            end_dt = get_day_end(datetime.strptime(end_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time <= end_dt)
         except ValueError:
             raise HTTPException(
@@ -782,7 +783,7 @@ async def get_attendance_summary(
     
     if start_date:
         try:
-            start_dt = TIMEZONE.localize(datetime.strptime(start_date, "%Y-%m-%d"))
+            start_dt = get_day_start(datetime.strptime(start_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time >= start_dt)
         except ValueError:
             raise HTTPException(
@@ -792,7 +793,7 @@ async def get_attendance_summary(
     
     if end_date:
         try:
-            end_dt = TIMEZONE.localize(datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999))
+            end_dt = get_day_end(datetime.strptime(end_date, "%Y-%m-%d"))
             query = query.filter(AttendanceLog.check_in_time <= end_dt)
         except ValueError:
             raise HTTPException(
