@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from database import get_db
-from models.db_models import User, Role, Department
+from models.db_models import User, Role, Department, EmployeeFile
 from datetime import datetime
 
 router = APIRouter()
@@ -122,6 +122,21 @@ class UsersListResponse(BaseModel):
     message: str
     users: List[UserResponse]
     total_count: int
+
+class DocumentResponse(BaseModel):
+    document_id: str
+    user_id: str
+    document_type: str
+    file_path: str
+    file_name: str
+    upload_date: str
+    
+    class Config:
+        from_attributes = True
+
+class UserDetailsResponse(BaseModel):
+    user: UserResponse
+    documents: List[DocumentResponse]
 
 class UpdateProfilePhotoRequest(BaseModel):
     profile_photo_url: str
@@ -712,4 +727,111 @@ async def get_users_by_department(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving users by department: {str(e)}"
+        )
+
+@router.get("/users/{user_id}", response_model=UserDetailsResponse)
+async def get_user_details(
+    user_id: str,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed information for a specific user including their documents.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    if not verify_admin_role(token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions to access user details"
+        )
+    
+    try:
+        # Query user with their role and department
+        user = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).filter(
+            User.user_id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Query user documents
+        documents = db.query(EmployeeFile).filter(
+            EmployeeFile.user_id == user_id,
+            EmployeeFile.deleted_at.is_(None)
+        ).all()
+        
+        # Prepare user response
+        user_data = UserResponse(
+            user_id=str(user.user_id),
+            employee_number=user.employee_number,
+            national_id=user.national_id,
+            first_name=user.first_name,
+            surname=user.surname,
+            other_names=user.other_names,
+            suffix=user.suffix,
+            date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+            gender=user.gender,
+            home_of_origin=user.home_of_origin,
+            traditional_authority=user.traditional_authority,
+            district=user.district,
+            current_address=user.current_address,
+            contact_number=user.contact_number,
+            email=user.email,
+            marital_status=user.marital_status,
+            spouse_name=user.spouse_name,
+            spouse_contact=user.spouse_contact,
+            date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+            designation=user.designation.name if user.designation else None,
+            department_id=str(user.department_id) if user.department_id else None,
+            is_head_of_department=user.is_head_of_department,
+            phone=user.phone,
+            role_id=str(user.role_id),
+            status=user.status,
+            profile_photo_url=user.profile_photo_url,
+            blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+            blacklisted_reason=user.blacklisted_reason,
+            registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+            selfie_verified=user.selfie_verified,
+            last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+            created_at=user.created_at.isoformat() if user.created_at else None,
+            updated_at=user.updated_at.isoformat() if user.updated_at else None,
+            deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+            deleted_by=str(user.deleted_by) if user.deleted_by else None,
+            role_name=user.role.name if user.role else "Unknown",
+            department_name=user.department.name if user.department else None
+        )
+        
+        # Prepare documents response
+        document_responses = []
+        for doc in documents:
+            doc_data = DocumentResponse(
+                document_id=str(doc.employee_file_id),
+                user_id=str(doc.user_id),
+                document_type=doc.file_type,
+                file_path=doc.file_url,
+                file_name=doc.original_filename or 'Unknown',
+                upload_date=doc.upload_date.isoformat() if doc.upload_date else None
+            )
+            document_responses.append(doc_data)
+        
+        return UserDetailsResponse(
+            user=user_data,
+            documents=document_responses
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving user details: {str(e)}"
         )

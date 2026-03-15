@@ -200,6 +200,42 @@ async def get_unread_count(
     
     return {"unread_count": count}
 
+@router.post("/test-push", response_model=dict)
+async def test_push_notification(
+    title: str = "Test Notification",
+    body: str = "This is a test notification from the backend",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Test push notification for the current user"""
+    try:
+        # Get user's FCM tokens
+        fcm_tokens = db.query(UserFCMToken).filter(UserFCMToken.user_id == current_user.user_id).all()
+        
+        if not fcm_tokens:
+            return {"error": "No FCM tokens found for this user"}
+        
+        results = []
+        for token_record in fcm_tokens:
+            result = await send_push_notification(
+                token=token_record.fcm_token,
+                title=title,
+                body=body,
+                data={"test": "true", "timestamp": str(datetime.now())}
+            )
+            results.append({
+                "token": token_record.fcm_token[:20] + "...",
+                "result": result
+            })
+        
+        return {
+            "message": f"Test notifications sent to {len(results)} tokens",
+            "results": results
+        }
+        
+    except Exception as e:
+        return {"error": f"Failed to send test notification: {str(e)}"}
+
 @router.delete("/{notification_id}", response_model=dict)
 async def delete_notification(
     notification_id: str,
