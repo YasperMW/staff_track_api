@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from mail_service import email_service
 from notification_service import NotificationService
+from fcm_service import send_push_notification
 from timezone_config import get_current_time, to_utc
 
 router = APIRouter()
@@ -136,10 +137,23 @@ def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> boo
     return True
 
 # Endpoints
+MAX_FAILED_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
+LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+NOTIFY_AFTER_FAILED_ATTEMPTS = int(os.getenv("NOTIFY_AFTER_FAILED_ATTEMPTS", "3"))
+
 @router.post("/login", response_model=AuthResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     # Check against database users only
     user = db.query(User).filter(User.email == request.email).first()
+    if user:
+        # Check if account is locked
+        if user.locked_until and user.locked_until > datetime.utcnow():
+            remaining_time = (user.locked_until - datetime.utcnow()).seconds // 60
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
+            )
+
     if user and verify_password(request.password, user.password_hash):
         # Check if email is verified
         if user.status != "active":
@@ -147,7 +161,11 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Email not verified. Please verify your email first."
             )
-        
+
+        # Reset failed login attempts on successful login
+        user.failed_login_attempts = 0
+        user.locked_until = None
+
         # Update last login
         user.last_login_at = to_utc(get_current_time())
         db.commit()
@@ -168,7 +186,57 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                 "phone": user.phone,
             }
         )
-    
+
+    # Failed login - track attempts
+    if user:
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+
+        # Check if we should notify about suspicious activity
+        if user.failed_login_attempts >= NOTIFY_AFTER_FAILED_ATTEMPTS:
+            # Send push notification for suspicious login attempts
+            if user.fcm_tokens:
+                for token_record in user.fcm_tokens:
+                    try:
+                        await send_push_notification(
+                            token=token_record.fcm_token,
+                            title="Security Alert",
+                            body=f"Warning: {user.failed_login_attempts} failed login attempts detected on your account",
+                            data={
+                                "type": "security_alert",
+                                "action": "failed_login_attempts"
+                            }
+                        )
+                    except Exception as e:
+                        print(f"Failed to send push notification: {e}")
+
+        # Lock account if too many failed attempts
+        if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+            user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+            db.commit()
+
+            # Send account locked notification
+            if user.fcm_tokens:
+                for token_record in user.fcm_tokens:
+                    try:
+                        await send_push_notification(
+                            token=token_record.fcm_token,
+                            title="Account Locked",
+                            body=f"Your account has been locked due to multiple failed login attempts. Try again in {LOCKOUT_MINUTES} minutes.",
+                            data={
+                                "type": "security_alert",
+                                "action": "account_locked"
+                            }
+                        )
+                    except Exception as e:
+                        print(f"Failed to send push notification: {e}")
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account locked due to too many failed attempts. Try again in {LOCKOUT_MINUTES} minutes."
+            )
+
+        db.commit()
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid credentials"
@@ -560,12 +628,28 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
         user.updated_at = datetime.utcnow()
         db.commit()
         
-        # Send password change confirmation email
+        # Send password change confirmation email and push notification
         try:
             await email_service.send_password_reset_email(user.email, user.first_name)
         except Exception as e:
             # Log error but don't fail the password reset
             print(f"Failed to send password reset confirmation email: {e}")
+
+        # Send push notification for password change
+        try:
+            if user.fcm_tokens:
+                for token_record in user.fcm_tokens:
+                    await send_push_notification(
+                        token=token_record.fcm_token,
+                        title="Password Changed",
+                        body="Your password has been successfully changed. If you didn't do this, please contact support immediately.",
+                        data={
+                            "type": "security_alert",
+                            "action": "password_changed"
+                        }
+                    )
+        except Exception as e:
+            print(f"Failed to send password change push notification: {e}")
         
         return AuthResponse(
             success=True,

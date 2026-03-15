@@ -42,6 +42,8 @@ class User(Base):
     registration_timestamp = Column(DateTime(timezone=True))
     selfie_verified = Column(Boolean, default=False)
     last_login_at = Column(DateTime(timezone=True))
+    failed_login_attempts = Column(Integer, default=0)  # Track consecutive failed login attempts
+    locked_until = Column(DateTime(timezone=True))  # Temporary lock until this time
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
     deleted_at = Column(DateTime(timezone=True))

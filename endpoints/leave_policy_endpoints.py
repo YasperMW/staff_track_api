@@ -121,22 +121,23 @@ async def apply_policy(
             except Exception as e:
                 print(f"Failed to send leave policy email to {u.email}: {e}")
         
-        # Send push notification if user has FCM token
-        if hasattr(u, 'fcm_token') and u.fcm_token:
-            try:
-                await send_push_notification(
-                    token=u.fcm_token,
-                    title="Leave Policy Updated",
-                    message=f"Your {payload.leave_type.replace('_', ' ').title()} leave entitlement has been updated",
-                    data={
-                        "type": "leave_policy_update",
-                        "leave_type": payload.leave_type,
-                        "allocated_days": payload.allocated_days,
-                        "bonus_days": payload.bonus_days
-                    }
-                )
-            except Exception as e:
-                print(f"Failed to send leave policy push notification: {e}")
+        # Send push notification if user has FCM tokens
+        if u.fcm_tokens:
+            for token_record in u.fcm_tokens:
+                try:
+                    await send_push_notification(
+                        token=token_record.fcm_token,
+                        title="Leave Policy Updated",
+                        body=f"Your {payload.leave_type.replace('_', ' ').title()} leave entitlement has been updated",
+                        data={
+                            "type": "leave_policy_update",
+                            "leave_type": payload.leave_type,
+                            "allocated_days": payload.allocated_days,
+                            "bonus_days": payload.bonus_days
+                        }
+                    )
+                except Exception as e:
+                    print(f"Failed to send leave policy push notification: {e}")
     
     # Bulk insert notifications
     if notifications_to_create:

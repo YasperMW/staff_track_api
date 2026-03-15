@@ -260,35 +260,42 @@ async def create_request(
             pass
 
     now = datetime.utcnow()
-    # Determine initial approver
+    # Determine initial approver - always start with HOD
+    # Approval chain: HOD (Level 1) -> HR (Level 2) -> Admin (Level 3) -> Accountant (Level 4)
     approver_id = None
-    
-    if payload.type.lower() == "leave duty station":
-        # Chain: Accountant -> HOD -> Admin
-        accountant = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Accountant", User.deleted_at.is_(None)).first()
-        if accountant:
-            approver_id = accountant.user_id
-        else:
-            # Fallback to HOD if no accountant
-            hod = db.query(User).filter(User.department_id == current_user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
-            approver_id = hod.user_id if hod else None
+
+    # First approver is always the HOD of the user's department
+    hod = db.query(User).filter(
+        User.department_id == current_user.department_id,
+        User.is_head_of_department == True,
+        User.deleted_at.is_(None)
+    ).first()
+    if hod:
+        approver_id = hod.user_id
     else:
-        # Standard Leave Request chain: HOD -> HR -> Admin
-        hod = db.query(User).filter(
-            User.department_id == current_user.department_id,
-            User.is_head_of_department == True,
+        # Fallback to HR if no HOD found
+        hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+            Role.name.in_(["HR Admin", "HR"]),
             User.deleted_at.is_(None)
         ).first()
-        if hod:
-            approver_id = hod.user_id
+        if hr:
+            approver_id = hr.user_id
         else:
-            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
-            if hr:
-                approver_id = hr.user_id
+            # Fallback to Admin if no HR found
+            principal = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                Role.name == "Principal Hospital Administrator",
+                User.deleted_at.is_(None)
+            ).first()
+            if principal:
+                approver_id = principal.user_id
             else:
-                principal = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
-                if principal:
-                    approver_id = principal.user_id
+                # Final fallback to Accountant
+                accountant = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                    Role.name == "Accountant",
+                    User.deleted_at.is_(None)
+                ).first()
+                if accountant:
+                    approver_id = accountant.user_id
 
     new_request = Request(
         user_id=current_user.user_id,
@@ -681,35 +688,57 @@ async def approve_request(
         timestamp=now
     )
     
-    # Trip Request Approval Chain (Accountant -> HOD -> Admin)
+    # Trip/Duty Station Request Approval Chain (HOD -> HR -> Admin -> Accountant)
     if req.type.lower() == "leave duty station":
-        # Stage 1: Accountant (Section C)
+        # Stage 1: HOD (Section B)
         if req.approval_level == 1:
-            approval.accountant_funds_available = payload.accountant_funds_available
-            approval.accountant_signed_date = now.date()
+            approval.hod_trip_recommendation = payload.hod_trip_recommendation
             approval.level = 1
             req.approval_level = 2
-            
-            # Next: HOD
-            hod = db.query(User).filter(User.department_id == req.user.department_id, User.is_head_of_department == True, User.deleted_at.is_(None)).first()
-            next_approver_id = hod.user_id if hod else None
+
+            # Next: HR
+            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                Role.name.in_(["HR Admin", "HR"]),
+                User.deleted_at.is_(None)
+            ).first()
+            next_approver_id = hr.user_id if hr else None
             req.current_approver_id = next_approver_id
-            
-        # Stage 2: HOD (Section D)
+
+        # Stage 2: HR (Section C)
         elif req.approval_level == 2:
-            approval.hod_trip_recommendation = payload.hod_trip_recommendation
+            # HR reviews and confirms leave entitlement
+            approval.hr_annual_entitlement = payload.hr_annual_entitlement
+            approval.hr_balance_if_approved = payload.hr_balance_if_approved
             approval.level = 2
             req.approval_level = 3
-            
+
             # Next: Administrator
-            admin = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "Principal Hospital Administrator", User.deleted_at.is_(None)).first()
+            admin = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                Role.name == "Principal Hospital Administrator",
+                User.deleted_at.is_(None)
+            ).first()
             next_approver_id = admin.user_id if admin else None
             req.current_approver_id = next_approver_id
-            
-        # Stage 3: Admin (Section E)
+
+        # Stage 3: Admin (Section D)
         elif req.approval_level == 3:
             approval.admin_trip_approval_details = payload.admin_trip_approval_details
             approval.level = 3
+            req.approval_level = 4
+
+            # Next: Accountant (Final - budget check)
+            accountant = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                Role.name == "Accountant",
+                User.deleted_at.is_(None)
+            ).first()
+            next_approver_id = accountant.user_id if accountant else None
+            req.current_approver_id = next_approver_id
+
+        # Stage 4: Accountant (Final approval)
+        elif req.approval_level == 4:
+            approval.accountant_funds_available = payload.accountant_funds_available
+            approval.accountant_signed_date = now.date()
+            approval.level = 4
             req.status = 'approved'
             req.current_approver_id = None
             
@@ -752,10 +781,23 @@ async def approve_request(
             approval.admin_granted_to = payload.admin_granted_to
             approval.admin_total_days_approved = payload.admin_total_days_approved
             approval.level = 3
+            req.approval_level = 4
+
+            # Next: Accountant (Level 4)
+            accountant = db.query(User).join(Role, User.role_id == Role.role_id).filter(
+                Role.name == "Accountant",
+                User.deleted_at.is_(None)
+            ).first()
+            next_approver_id = accountant.user_id if accountant else None
+            req.current_approver_id = next_approver_id
+
+        # Stage 4: Accountant (Final approval)
+        elif req.approval_level == 4:
+            approval.level = 4
             req.status = 'approved'
             req.current_approver_id = None
-            
-            # Update Leave Balance
+
+            # Update Leave Balance only after final approval
             duration = payload.admin_total_days_approved or 0
             if req.type in ["annual_leave", "compassionate_leave", "maternity", "paternity", "unpaid_leave"]:
                 lb = db.query(LeaveBalance).filter(LeaveBalance.user_id == req.user_id, LeaveBalance.leave_type == req.type).first()

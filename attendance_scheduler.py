@@ -110,6 +110,54 @@ class AttendanceScheduler:
                 
         except Exception as e:
             logger.error(f"Error in check-out reminders scheduler: {e}")
+
+    @staticmethod
+    async def send_late_checkin_alerts():
+        """Send alerts to users who haven't checked in by 9:00 AM (late check-in)"""
+        try:
+            current_time = get_current_time()
+
+            # Only run at 9:00 AM
+            if current_time.hour != 9 or current_time.minute != 0:
+                return
+
+            logger.info("Running late check-in alerts scheduler")
+
+            # Get database session
+            db = next(get_db())
+
+            try:
+                # Get all active users who haven't checked in today
+                today_start = get_day_start(current_time)
+                today_end = get_day_end(current_time)
+
+                # Find users who haven't checked in yet
+                checked_in_user_ids = db.query(AttendanceLog.user_id).filter(
+                    and_(
+                        AttendanceLog.check_in_time >= today_start,
+                        AttendanceLog.check_in_time <= today_end
+                    )
+                ).subquery()
+
+                late_users = db.query(User).filter(
+                    and_(
+                        User.deleted_at.is_(None),
+                        ~User.user_id.in_(checked_in_user_ids)
+                    )
+                ).all()
+
+                logger.info(f"Found {len(late_users)} users who are late for check-in")
+
+                for user in late_users:
+                    await AttendanceScheduler._send_late_checkin_alert(db, user)
+
+                logger.info(f"Sent late check-in alerts to {len(late_users)} users")
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"Error in late check-in alerts scheduler: {e}")
     
     @staticmethod
     async def _send_check_in_reminder(db: Session, user: User):
@@ -205,6 +253,43 @@ class AttendanceScheduler:
         except Exception as e:
             logger.error(f"Failed to send check-out reminder to user {user.user_id}: {e}")
 
+    @staticmethod
+    async def _send_late_checkin_alert(db: Session, user: User):
+        """Send late check-in alert to a specific user"""
+        try:
+            # Get user's FCM tokens
+            fcm_tokens = db.query(UserFCMToken).filter(UserFCMToken.user_id == user.user_id).all()
+
+            if fcm_tokens:
+                for token_record in fcm_tokens:
+                    await send_push_notification(
+                        token=token_record.fcm_token,
+                        title="⚠️ Late Check-in Alert",
+                        body="You haven't checked in yet. Please check in immediately or contact your supervisor.",
+                        data={
+                            "type": "late_checkin_alert",
+                            "reminder_time": get_current_time().isoformat()
+                        }
+                    )
+
+            # Create in-app notification
+            notification = Notification(
+                user_id=user.user_id,
+                title="⚠️ Late Check-in Alert",
+                message="You haven't checked in yet. Please check in immediately or contact your supervisor.",
+                type="reminder",
+                is_read=False,
+                created_at=get_current_time(),
+                updated_at=get_current_time()
+            )
+            db.add(notification)
+            db.commit()
+
+            logger.info(f"Sent late check-in alert to user {user.user_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to send late check-in alert to user {user.user_id}: {e}")
+
 # Global scheduler instance
 attendance_scheduler = AttendanceScheduler()
 
@@ -217,7 +302,12 @@ async def run_check_out_reminders():
     """Task to be called by scheduler at 4:00 PM daily"""
     await attendance_scheduler.send_check_out_reminders()
 
+async def run_late_checkin_alerts():
+    """Task to be called by scheduler at 9:00 AM daily"""
+    await attendance_scheduler.send_late_checkin_alerts()
+
 if __name__ == "__main__":
     # For testing purposes
     asyncio.run(run_check_in_reminders())
     asyncio.run(run_check_out_reminders())
+    asyncio.run(run_late_checkin_alerts())
