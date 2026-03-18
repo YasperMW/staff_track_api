@@ -250,22 +250,58 @@ class NotificationService:
                     UserFCMToken.user_id == user_id
                 ).all()
                 
-                # Add navigation data to the push notification
-                navigation_data = NotificationService._get_navigation_data(notification_type, data)
-                push_data = {**(data or {}), **navigation_data}
-                
-                for token_record in fcm_tokens:
-                    try:
-                        await send_push_notification(
-                            token=token_record.fcm_token,
-                            title=title,
-                            body=message,
-                            data=push_data
-                        )
-                        notifications_sent.append("push")
-                        logger.info(f"Push notification sent to user {user_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to send push notification: {e}")
+                if fcm_tokens:
+                    logger.info(f"🔔 PREPARING TO SEND PUSH NOTIFICATION")
+                    logger.info(f"   User ID: {user_id}")
+                    logger.info(f"   User: {user.first_name} {user.surname}")
+                    logger.info(f"   Title: {title}")
+                    logger.info(f"   Message: {message}")
+                    logger.info(f"   Type: {notification_type}")
+                    logger.info(f"   FCM Tokens Found: {len(fcm_tokens)}")
+                    
+                    # Add navigation data to the push notification
+                    navigation_data = NotificationService._get_navigation_data(notification_type, data)
+                    push_data = {**(data or {}), **navigation_data}
+                    
+                    for token_record in fcm_tokens:
+                        try:
+                            logger.info(f"📱 SENDING PUSH NOTIFICATION")
+                            logger.info(f"   Token: {token_record.fcm_token[:20]}...")
+                            logger.info(f"   To: {user.first_name} {user.surname}")
+                            logger.info(f"   Title: {title}")
+                            logger.info(f"   Message: {message}")
+                            logger.info(f"   Data: {push_data}")
+                            
+                            response = await send_push_notification(
+                                token=token_record.fcm_token,
+                                title=title,
+                                body=message,
+                                data=push_data
+                            )
+                            
+                            if response:
+                                logger.info(f"✅ PUSH NOTIFICATION SENT SUCCESSFULLY")
+                                logger.info(f"   Response: {response}")
+                                notifications_sent.append("push")
+                            else:
+                                logger.error(f"❌ PUSH NOTIFICATION FAILED")
+                                logger.error(f"   Token: {token_record.fcm_token[:20]}...")
+                                logger.error(f"   User: {user.first_name} {user.surname}")
+                                logger.error(f"   Title: {title}")
+                                logger.error(f"   Message: {message}")
+                                logger.error(f"   Data: {push_data}")
+                        except Exception as e:
+                            logger.error(f"❌ PUSH NOTIFICATION EXCEPTION")
+                            logger.error(f"   Token: {token_record.fcm_token[:20]}...")
+                            logger.error(f"   User: {user.first_name} {user.surname}")
+                            logger.error(f"   Title: {title}")
+                            logger.error(f"   Message: {message}")
+                            logger.error(f"   Data: {push_data}")
+                            logger.error(f"   Error: {e}")
+                else:
+                    logger.warning(f"⚠️  NO FCM TOKENS FOUND FOR USER {user_id}")
+                    logger.warning(f"   User: {user.first_name} {user.surname}")
+                    logger.warning(f"   Cannot send push notification without FCM tokens")
             
             # Send email notification
             if user_prefs['email_enabled'] and user.email and email_data:

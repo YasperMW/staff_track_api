@@ -230,7 +230,7 @@ class AttendanceScheduler:
                         body=f"It's 4:00 PM! Time to check out. Current work hours: {current_hours:.1f}",
                         data={
                             "type": "check_out_reminder",
-                            "current_hours": round(current_hours, 2),
+                            "current_hours": str(round(current_hours, 2)),
                             "reminder_time": get_current_time().isoformat()
                         }
                     )
@@ -239,7 +239,7 @@ class AttendanceScheduler:
             notification = Notification(
                 user_id=user.user_id,
                 title="⏰ Check-out Reminder",
-                body=f"It's 4:00 PM! Time to check out. Current work hours: {current_hours:.1f}",
+                message=f"It's 4:00 PM! Time to check out. Current work hours: {current_hours:.1f}",
                 type="reminder",
                 is_read=False,
                 created_at=get_current_time(),

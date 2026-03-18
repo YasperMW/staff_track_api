@@ -9,8 +9,16 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/staff_track")
 
-# Create SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
+# Create SQLAlchemy engine with optimized pool settings
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,          # Increase base pool size
+    max_overflow=30,        # Increase overflow connections
+    pool_timeout=30,        # Timeout for getting connection from pool
+    pool_recycle=3600,      # Recycle connections every hour
+    pool_pre_ping=True,     # Validate connections before use
+    echo=False              # Disable SQL logging in production
+)
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

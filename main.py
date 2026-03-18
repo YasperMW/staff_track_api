@@ -49,9 +49,10 @@ async def lifespan(app: FastAPI):
         """Run attendance reminder checks every minute"""
         while True:
             try:
-                # Check if it's time for check-in reminders (7:30 AM) or check-out reminders (4:00 PM)
+                # Check if it's time for check-in reminders (7:30 AM), check-out reminders (4:00 PM), or late check-in alerts (9:00 AM)
                 await attendance_scheduler.send_check_in_reminders()
                 await attendance_scheduler.send_check_out_reminders()
+                await attendance_scheduler.send_late_checkin_alerts()
             except Exception as e:
                 print(f"Error in attendance scheduler: {e}")
             # Check every minute

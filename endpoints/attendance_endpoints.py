@@ -11,7 +11,7 @@ from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, AttendanceLog, Notification, Role, AuditLog
 from models.auth_models import CheckInRequest, CheckOutRequest
-from fcm_service import send_push_notification
+from notification_service import NotificationService
 from mail_service import email_service
 from timezone_config import get_current_time, to_app_timezone, to_utc, timezone_aware, get_day_start, get_day_end, get_year_start
 
@@ -224,28 +224,34 @@ async def check_in(
                         
                         # Send push notifications
                         if hasattr(current_user, 'fcm_token') and current_user.fcm_token:
-                            await send_push_notification(
-                                token=current_user.fcm_token,
+                            await NotificationService.send_notification(
+                                db=db,
+                                user_id=str(current_user.user_id),
                                 title="⚠️ Geofence Violation",
-                                body=f"Your check-in was detected {dist - rad:.0f}m outside the work area",
+                                message=f"Your check-in was detected {dist - rad:.0f}m outside work area",
+                                notification_type="geofence_violation",
                                 data={
                                     "type": "geofence_violation",
-                                    "distance": dist - rad,
-                                    "location": location_str or f"Lat: {latitude}, Lng: {longitude}"
-                                }
+                                    "location": location_str or f"Lat: {latitude}, Lng: {longitude}",
+                                    "distance_outside": f"{dist - rad:.0f}"
+                                },
+                                force_send=True
                             )
                         
                         if hasattr(supervisor, 'fcm_token') and supervisor.fcm_token:
-                            await send_push_notification(
-                                token=supervisor.fcm_token,
+                            await NotificationService.send_notification(
+                                db=db,
+                                user_id=str(supervisor.user_id),
                                 title="🚨 Geofence Violation Alert",
-                                body=f"{current_user.first_name} {current_user.surname} checked in outside work area",
+                                message=f"{current_user.first_name} {current_user.surname} checked in outside work area",
+                                notification_type="geofence_violation",
                                 data={
-                                    "type": "team_geofence_violation",
-                                    "employee_id": str(current_user.user_id),
+                                    "type": "geofence_violation",
                                     "employee_name": f"{current_user.first_name} {current_user.surname}",
-                                    "distance": dist - rad
-                                }
+                                    "location": location_str or f"Lat: {latitude}, Lng: {longitude}",
+                                    "distance_outside": f"{dist - rad:.0f}"
+                                },
+                                force_send=True
                             )
                     
                     # Create notification record
@@ -320,29 +326,39 @@ async def check_in(
     print(f"  saved attendance.device_id: {attendance.device_id}")
     
     # Send check-in confirmation notification
+    print(f" CHECK-IN NOTIFICATION PROCESS STARTING")
+    print(f"   User: {current_user.first_name} {current_user.surname} ({current_user.user_id})")
+    print(f"   Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   Location: {location_str or 'N/A'}")
+    print(f"   Shift: {attendance.shift_type or 'Day Shift'}")
+    
     try:
-        # Get user's FCM tokens
-        from models.db_models import UserFCMToken
-        fcm_tokens = db.query(UserFCMToken).filter(UserFCMToken.user_id == current_user.user_id).all()
+        result = await NotificationService.send_notification(
+            db=db,
+            user_id=str(current_user.user_id),
+            title=" Check-in Successful",
+            message=f"Checked in at {current_time.strftime('%H:%M')} • {attendance.shift_type or 'Day Shift'}",
+            notification_type="attendance",
+            data={
+                "type": "check_in_confirmation",
+                "attendance_log_id": str(attendance.attendance_log_id),
+                "check_in_time": current_time.isoformat(),
+                "shift_type": attendance.shift_type or "Day Shift"
+            },
+            force_send=True
+        )
         
-        if fcm_tokens:
-            for token_record in fcm_tokens:
-                await send_push_notification(
-                    token=token_record.fcm_token,
-                    title="✅ Check-in Successful",
-                    body=f"Checked in at {current_time.strftime('%H:%M')} • {attendance.shift_type or 'Day Shift'}",
-                    data={
-                        "type": "check_in_confirmation",
-                        "attendance_log_id": str(attendance.attendance_log_id),
-                        "check_in_time": current_time.isoformat(),
-                        "shift_type": attendance.shift_type or "Day Shift"
-                    }
-                )
+        if result.get("status") == "success":
+            print(f" CHECK-IN NOTIFICATION SENT SUCCESSFULLY")
+            print(f"   Result: {result}")
+        else:
+            print(f" CHECK-IN NOTIFICATION FAILED")
+            print(f"   Result: {result}")
         
         # Create in-app notification
         notification = Notification(
             user_id=current_user.user_id,
-            title="✅ Check-in Successful",
+            title=" Check-in Successful",
             message=f"You successfully checked in at {current_time.strftime('%H:%M')} for {attendance.shift_type or 'Day Shift'}",
             type="attendance",
             is_read=False,
@@ -351,7 +367,11 @@ async def check_in(
         )
         db.add(notification)
         db.commit()
+        db.add(AuditLog(actor_id=current_user.user_id, action="check_in", entity="attendance", details={"attendance_log_id": str(attendance.attendance_log_id)}))
+        db.commit()
         
+        print(f" CHECK-IN NOTIFICATION PROCESS COMPLETED")
+    
     except Exception as e:
         print(f"Failed to send check-in notification: {e}")
     
@@ -581,24 +601,21 @@ async def check_out(
     
     # Send check-out confirmation notification
     try:
-        # Get user's FCM tokens
-        from models.db_models import UserFCMToken
-        fcm_tokens = db.query(UserFCMToken).filter(UserFCMToken.user_id == current_user.user_id).all()
-        
-        if fcm_tokens:
-            for token_record in fcm_tokens:
-                await send_push_notification(
-                    token=token_record.fcm_token,
-                    title="✅ Check-out Successful",
-                    body=f"Checked out at {attendance.check_out_time.strftime('%H:%M')} • {round(work_hours, 1)} hours worked",
-                    data={
-                        "type": "check_out_confirmation",
-                        "attendance_log_id": str(attendance.attendance_log_id),
-                        "check_out_time": attendance.check_out_time.isoformat(),
-                        "work_hours": round(work_hours, 2),
-                        "shift_type": attendance.shift_type
-                    }
-                )
+        await NotificationService.send_notification(
+            db=db,
+            user_id=str(current_user.user_id),
+            title="✅ Check-out Successful",
+            message=f"Checked out at {attendance.check_out_time.strftime('%H:%M')} • {round(work_hours, 1)} hours worked",
+            notification_type="attendance",
+            data={
+                "type": "check_out_confirmation",
+                "attendance_log_id": str(attendance.attendance_log_id),
+                "check_out_time": attendance.check_out_time.isoformat(),
+                "work_hours": f"{round(work_hours, 1)}",
+                "shift_type": attendance.shift_type
+            },
+            force_send=True
+        )
         
         # Create in-app notification
         notification = Notification(
