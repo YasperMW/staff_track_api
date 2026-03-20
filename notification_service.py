@@ -270,15 +270,18 @@ class NotificationService:
                             logger.info(f"   To: {user.first_name} {user.surname}")
                             logger.info(f"   Title: {title}")
                             logger.info(f"   Message: {message}")
+                            logger.info(f"   Type: {notification_type}")
                             logger.info(f"   Data: {push_data}")
-                            
+
                             response = await send_push_notification(
                                 token=token_record.fcm_token,
                                 title=title,
                                 body=message,
-                                data=push_data
+                                data=push_data,
+                                priority="high",
+                                notification_type=notification_type
                             )
-                            
+
                             if response:
                                 logger.info(f"✅ PUSH NOTIFICATION SENT SUCCESSFULLY")
                                 logger.info(f"   Response: {response}")
