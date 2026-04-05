@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import text, select
+from sqlalchemy import select
 from database import get_db
 from models.db_models import Role, Department, Designation
 from datetime import datetime
@@ -395,25 +395,20 @@ async def get_all_designations(db: Session = Depends(get_db)):
     Get all available designations from the database.
     """
     try:
-        # Query with department join
-        designations = db.execute(text("""
-            SELECT d.designation_id, d.name, d.description, d.department_id, d.created_at,
-                   dept.name as department_name
-            FROM designations d
-            LEFT JOIN departments dept ON d.department_id = dept.department_id
-            WHERE d.deleted_at IS NULL
-            ORDER BY dept.name, d.name
-        """)).fetchall()
+        # Query using SQLAlchemy ORM instead of raw SQL
+        designations_query = db.query(Designation, Department.name.label('department_name')).join(
+            Department, Designation.department_id == Department.department_id
+        ).filter(Designation.deleted_at.is_(None)).order_by(Department.name, Designation.name)
         
         designation_responses = []
-        for desig in designations:
+        for designation, department_name in designations_query:
             designation_data = DesignationResponse(
-                designation_id=str(desig[0]),
-                name=desig[1],
-                description=desig[2],
-                department_id=str(desig[3]),
-                department_name=desig[4],
-                created_at=desig[5].isoformat() if desig[5] else None
+                designation_id=str(designation.designation_id),
+                name=designation.name,
+                description=designation.description,
+                department_id=str(designation.department_id) if designation.department_id else None,
+                department_name=department_name,
+                created_at=designation.created_at.isoformat() if designation.created_at else None
             )
             designation_responses.append(designation_data)
         

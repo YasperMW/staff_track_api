@@ -6,6 +6,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Mock response class for when Firebase is not initialized
+class MockMulticastResponse:
+    def __init__(self, success_count=0, failure_count=0):
+        self.success_count = success_count
+        self.failure_count = failure_count
+        self.responses = []
+
 # Initialize Firebase Admin SDK
 # You can either set FIREBASE_SERVICE_ACCOUNT_PATH to point to a JSON file
 # or set individual environment variables for the credentials
@@ -31,23 +38,32 @@ def get_firebase_credentials():
             "auth_uri": auth_uri,
             "token_uri": token_uri
         }
+        logger.info(f"Using Firebase credentials from environment for project: {project_id}")
         return credentials.Certificate(cred_dict)
     else:
         # Fall back to file-based approach
         service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "serviceAccountKey.json")
         if os.path.exists(service_account_path):
+            logger.info(f"Using Firebase credentials from file: {service_account_path}")
             return credentials.Certificate(service_account_path)
-        return None
+        else:
+            logger.warning("Firebase credentials not found. Please set FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL environment variables or provide serviceAccountKey.json file")
+            return None
+
+# Global variable to track Firebase initialization status
+_firebase_initialized = False
 
 try:
     cred = get_firebase_credentials()
     if cred:
         firebase_admin.initialize_app(cred)
+        _firebase_initialized = True
         logger.info("Firebase Admin SDK initialized successfully")
     else:
-        logger.warning("Firebase credentials not found. FCM will not work.")
+        logger.error("Firebase credentials not found. FCM will not work.")
 except Exception as e:
     logger.error(f"Error initializing Firebase Admin SDK: {e}")
+    _firebase_initialized = False
 
 
 def _get_android_config(priority: str = "high", notification_type: str = None) -> messaging.AndroidConfig:
@@ -68,7 +84,7 @@ def _get_android_config(priority: str = "high", notification_type: str = None) -
             default_sound=True,
             default_vibrate_timings=True,
             default_light_settings=True,
-            visibility=messaging.AndroidNotificationVisibility.PUBLIC,
+            visibility="public",
         ),
         ttl=86400,  # 24 hours - messages should not expire quickly
     )
@@ -101,6 +117,10 @@ async def send_push_notification(
     notification_type: str = None
 ):
     """Send a push notification to a single device with instant delivery settings"""
+    if not _firebase_initialized:
+        logger.error("Firebase not initialized. Cannot send push notification.")
+        return None
+        
     try:
         # Add priority to data payload for client-side handling
         notification_data = data or {}
@@ -136,8 +156,13 @@ async def send_multicast_push_notification(
     notification_type: str = None
 ):
     """Send a push notification to multiple devices with instant delivery settings"""
+    if not _firebase_initialized:
+        logger.error("Firebase not initialized. Cannot send multicast push notification.")
+        # Return mock response to allow system to continue gracefully
+        return MockMulticastResponse(success_count=0, failure_count=len(tokens) if tokens else 0)
+        
     if not tokens:
-        return None
+        return MockMulticastResponse(success_count=0, failure_count=0)
 
     # Add priority to data payload
     notification_data = data or {}
@@ -169,4 +194,4 @@ async def send_multicast_push_notification(
         return response
     except Exception as e:
         logger.error(f"Error sending multicast push notification: {e}")
-        return None
+        return MockMulticastResponse(success_count=0, failure_count=len(tokens))

@@ -1382,3 +1382,89 @@ async def get_department_top_performers(
     top_performers = performers[:5]
     
     return {"performers": top_performers}
+
+
+@router.get("/recent-check-ins")
+async def get_recent_check_ins(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get recent check-ins from all staff regardless of department.
+    This endpoint is for the Team attendance section on the web dashboard.
+    Returns the most recent check-ins across the entire organization.
+    """
+    from models.db_models import Department
+    
+    # Get all active staff (no department filter)
+    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    # Join with department to get department name
+    staff_query = staff_query.outerjoin(Department, User.department_id == Department.department_id)
+    staff = staff_query.all()
+    
+    if not staff:
+        return {"recent_check_ins": []}
+    
+    staff_ids = [u.user_id for u in staff]
+    
+    # Get recent check-ins from all staff
+    logs = (
+        db.query(AttendanceLog)
+        .filter(
+            AttendanceLog.user_id.in_(staff_ids),
+            AttendanceLog.check_in_time >= (datetime.now() - timedelta(days=7))  # Last 7 days
+        )
+        .order_by(desc(AttendanceLog.check_in_time))
+        .limit(limit)
+        .all()
+    )
+    
+    recent_check_ins = []
+    
+    for log in logs:
+        # Get user information
+        user = next((u for u in staff if u.user_id == log.user_id), None)
+        if not user:
+            continue
+        
+        # Calculate work hours if checked out
+        work_hours = None
+        if log.check_out_time:
+            work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
+        
+        # Convert PostGIS geography to string for API response
+        location_str = None
+        if log.location:
+            location_result = db.execute(
+                text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+                {"id": log.attendance_log_id}
+            ).first()
+            if location_result:
+                location_str = location_result[0]
+        
+        # Determine status
+        status = "Checked Out" if log.check_out_time else "Active"
+        
+        # Get department name from the joined department
+        department_name = "Unknown"
+        if hasattr(user, 'department') and user.department:
+            department_name = user.department.name
+        elif hasattr(user, '_Department') and user._Department:
+            department_name = user._Department.name
+        
+        recent_check_ins.append({
+            "attendance_log_id": str(log.attendance_log_id),
+            "user_id": str(log.user_id),
+            "name": f"{user.first_name or ''} {user.surname or ''}".strip(),
+            "employee_number": user.employee_number or "",
+            "check_in_time": log.check_in_time.isoformat(),
+            "check_out_time": log.check_out_time.isoformat() if log.check_out_time else None,
+            "location": location_str,
+            "work_hours": round(work_hours, 2) if work_hours else None,
+            "shift_type": log.shift_type,
+            "status": status,
+            "department": department_name
+        })
+    
+    return {"recent_check_ins": recent_check_ins}

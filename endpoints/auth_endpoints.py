@@ -21,6 +21,41 @@ from timezone_config import get_current_time, to_utc
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
+def determine_role(department_name: str, designation_name: str) -> tuple[str, bool]:
+    """
+    Determine user role based on department and designation.
+    Returns tuple of (role_name, is_head_of_department)
+    """
+    dept = department_name.lower() if department_name else ""
+    desig = designation_name.lower() if designation_name else ""
+
+    # 1. Principal Hospital Administrator - Administration dept with leadership designation
+    if "administration" in dept and any(k in desig for k in ["administrator", "director", "secretary", "principal"]):
+        return "Principal Hospital Administrator", False
+
+    # 2. System Admin - IT dept with admin designation
+    if "information technology" in dept or dept == "it":
+        if any(k in desig for k in ["admin", "system", "network", "it manager", "it support"]):
+            return "System Admin", False
+
+    # 3. HR - Human Resources dept or HR designation
+    if "human resource" in dept or any(k in desig for k in ["hr ", "human resource", "hr officer", "hr manager"]):
+        return "HR", False
+
+    # 4. Accountant - Finance dept or accountant designation
+    if "finance" in dept or any(k in desig for k in ["accountant", "accounts", "finance officer"]):
+        return "Accountant", False
+
+    # 5. Head of Department - leadership designation in other departments
+    hod_keywords = ["head", "director", "chief", "manager", "lead", "supervisor", "principal"]
+    exclude_keywords = ["administrator", "accountant", "hr ", "human resource"]
+
+    if any(k in desig for k in hod_keywords) and not any(k in desig for k in exclude_keywords):
+        return "Head of Department", True
+
+    # 6. Default: Regular Staff
+    return "Staff", False
+
 # Load environment variables
 load_dotenv()
 
@@ -29,9 +64,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production"
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
-# Mock database (in production, use a real database)
-# users_db = {}
-# sessions_db = {}
+
 
 @router.get("/grades")
 async def get_grades(db: Session = Depends(get_db)):
@@ -261,18 +294,6 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
                 detail="Employee number already registered"
             )
     
-    # Get or create role from request
-    role = db.query(Role).filter(Role.name == request.role).first()
-    if not role:
-        role = Role(
-            name=request.role,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(role)
-        db.commit()
-        db.refresh(role)
-    
     # Get or create department from request
     department = db.query(Department).filter(Department.name == request.department).first()
     if not department:
@@ -284,7 +305,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         db.add(department)
         db.commit()
         db.refresh(department)
-    
+
     # Get or create designation from request
     designation = db.query(Designation).filter(Designation.name == request.designation_id).first()
     if not designation:
@@ -297,6 +318,21 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         db.add(designation)
         db.commit()
         db.refresh(designation)
+
+    # Auto-determine role based on department and designation
+    determined_role_name, is_head_of_department = determine_role(department.name, designation.name)
+
+    # Get or create the determined role
+    role = db.query(Role).filter(Role.name == determined_role_name).first()
+    if not role:
+        role = Role(
+            name=determined_role_name,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(role)
+        db.commit()
+        db.refresh(role)
     
     # Parse dates (API sends YYYY-MM-DD strings)
     from datetime import date
@@ -338,6 +374,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         department_id=department.department_id,
         grade_id=request.grade_id,
         role_id=role.role_id,
+        is_head_of_department=is_head_of_department,  # Auto-set based on designation
         password_hash=hashed_password,
         profile_photo_url=request.profile_photo_url,
         status="pending",  # User starts as pending until email verification

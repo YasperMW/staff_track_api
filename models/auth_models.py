@@ -27,7 +27,7 @@ class RegisterRequest(BaseModel):
     designation_id: str
     department_id: str
     department: str
-    role: str
+    role: Optional[str] = None  # Role is now auto-determined from department and designation
     grade_id: Optional[str] = None
     profile_photo_url: Optional[str] = None
     password: str
