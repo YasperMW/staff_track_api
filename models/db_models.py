@@ -32,7 +32,8 @@ class User(Base):
     department_id = Column(UUID(as_uuid=True), ForeignKey("departments.department_id"))
     is_head_of_department = Column(Boolean, default=False)
     phone = Column(String(30), unique=True)
-    password_hash = Column(Text, nullable=False)
+    password_hash = Column(Text, nullable=True)  # Nullable for Google-only users
+    google_id = Column(String(100), unique=True, nullable=True)  # Google OAuth ID
     role_id = Column(UUID(as_uuid=True), ForeignKey("roles.role_id"), nullable=False)
     grade_id = Column(UUID(as_uuid=True), ForeignKey("grades.grade_id"))
     status = Column(String(30), nullable=False, default="pending")

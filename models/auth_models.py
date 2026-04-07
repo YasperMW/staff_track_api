@@ -86,3 +86,42 @@ class OTPResponse(BaseModel):
     success: bool
     message: str
     verified: bool = False
+
+
+# Google OAuth Models
+class GoogleAuthRequest(BaseModel):
+    id_token: str  # Google ID token from Flutter
+
+
+class GoogleCheckResponse(BaseModel):
+    exists: bool
+    user: Optional[dict] = None
+    google_data: Optional[dict] = None  # Pre-fill data: email, first_name, surname, photo
+    token: Optional[str] = None  # JWT token if user exists
+
+
+class GoogleRegisterRequest(BaseModel):
+    # Google ID token (will be verified to extract google_id, email, name)
+    id_token: str
+    # User-provided fields
+    employee_number: str
+    national_id: str
+    phone: str
+    department: str
+    department_id: str
+    designation_id: str
+    grade_id: Optional[str] = None
+    date_of_employment: str
+    date_of_birth: str
+    gender: str
+    home_of_origin: str
+    traditional_authority: str
+    district: str
+    current_address: str
+    # Optional fields
+    suffix: Optional[str] = ""
+    other_names: Optional[str] = ""
+    marital_status: Optional[str] = ""
+    spouse_name: Optional[str] = ""
+    spouse_contact: Optional[str] = ""
+    profile_photo_url: Optional[str] = None  # Override Google photo if provided

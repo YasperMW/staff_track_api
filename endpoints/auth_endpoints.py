@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from models.auth_models import LoginRequest, RegisterRequest, AuthResponse, ResetPasswordRequest, OTPRequest, OTPVerifyRequest, OTPResponse, ConfirmPasswordResetRequest
+from models.auth_models import LoginRequest, RegisterRequest, AuthResponse, ResetPasswordRequest, OTPRequest, OTPVerifyRequest, OTPResponse, ConfirmPasswordResetRequest, GoogleAuthRequest, GoogleCheckResponse, GoogleRegisterRequest
 from models.db_models import User, Role, Department, Designation, EmailVerification, Grade
 from typing import Optional, List
 import hashlib
@@ -17,6 +17,8 @@ from mail_service import email_service
 from notification_service import NotificationService
 from fcm_service import send_push_notification
 from timezone_config import get_current_time, to_utc
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -63,6 +65,7 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 
 
@@ -698,7 +701,7 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
                 "surname": user.surname,
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -706,3 +709,236 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset password"
         ) from e
+
+
+# Google OAuth Endpoints
+def verify_google_token(id_token_str: str) -> dict:
+    """Verify Google ID token and return user info"""
+    try:
+        # Verify the token using Google's public keys
+        idinfo = id_token.verify_oauth2_token(id_token_str, google_requests.Request())
+
+        # Check that the token is valid
+        if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+            raise ValueError('Invalid issuer')
+
+        # Validate client ID if configured
+        if GOOGLE_CLIENT_ID and idinfo.get('aud') != GOOGLE_CLIENT_ID:
+            raise ValueError('Invalid audience - token not intended for this application')
+
+        return {
+            'google_id': idinfo['sub'],
+            'email': idinfo['email'],
+            'first_name': idinfo.get('given_name', ''),
+            'surname': idinfo.get('family_name', ''),
+            'profile_photo_url': idinfo.get('picture', ''),
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid Google token: {str(e)}"
+        )
+
+
+@router.post("/google", response_model=GoogleCheckResponse)
+async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db)):
+    """Check if Google user exists - login if exists, return data for signup if new"""
+    # Verify Google token
+    google_data = verify_google_token(request.id_token)
+
+    # Check if user exists by google_id or email
+    user = db.query(User).filter(
+        (User.google_id == google_data['google_id']) | (User.email == google_data['email'])
+    ).first()
+
+    if user:
+        # Check if account is locked
+        if user.locked_until and user.locked_until > datetime.utcnow():
+            remaining_time = (user.locked_until - datetime.utcnow()).seconds // 60
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
+            )
+
+        # Check if user is active
+        if user.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is not active. Please contact administrator."
+            )
+
+        # Update google_id if not set (user registered via email but now using Google)
+        if not user.google_id:
+            user.google_id = google_data['google_id']
+            db.commit()
+
+        # Update last login
+        user.last_login_at = to_utc(get_current_time())
+        db.commit()
+        db.refresh(user)
+
+        # Create JWT token
+        token = create_access_token(data={"sub": user.email, "role": user.role.name})
+
+        return GoogleCheckResponse(
+            exists=True,
+            token=token,
+            user={
+                "user_id": str(user.user_id),
+                "email": user.email,
+                "first_name": user.first_name,
+                "surname": user.surname,
+                "role": user.role.name,
+                "department": user.department.name if user.department else "",
+                "phone": user.phone,
+            },
+            google_data=None
+        )
+
+    # New user - return Google data for signup form
+    return GoogleCheckResponse(
+        exists=False,
+        token=None,
+        user=None,
+        google_data=google_data
+    )
+
+
+@router.post("/google/register", response_model=AuthResponse)
+async def google_register(request: GoogleRegisterRequest, db: Session = Depends(get_db)):
+    """Complete Google user registration"""
+    # Check if user already exists
+    existing_user = db.query(User).filter(
+        (User.email == request.email) |
+        (User.employee_number == request.employee_number) |
+        (User.google_id == request.google_id)
+    ).first()
+
+    if existing_user:
+        if existing_user.email == request.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        if existing_user.employee_number == request.employee_number:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Employee number already registered"
+            )
+        if existing_user.google_id == request.google_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google account already registered"
+            )
+
+    # Get or create department
+    department = db.query(Department).filter(Department.name == request.department).first()
+    if not department:
+        department = Department(
+            name=request.department,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(department)
+        db.commit()
+        db.refresh(department)
+
+    # Get or create designation
+    designation = db.query(Designation).filter(Designation.name == request.designation_id).first()
+    if not designation:
+        designation = Designation(
+            name=request.designation_id,
+            department_id=department.department_id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(designation)
+        db.commit()
+        db.refresh(designation)
+
+    # Auto-determine role
+    determined_role_name, is_head_of_department = determine_role(department.name, designation.name)
+
+    # Get or create role
+    role = db.query(Role).filter(Role.name == determined_role_name).first()
+    if not role:
+        role = Role(
+            name=determined_role_name,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(role)
+        db.commit()
+        db.refresh(role)
+
+    # Create new user
+    new_user = User(
+        employee_number=request.employee_number,
+        national_id=request.national_id,
+        suffix=request.suffix,
+        first_name=request.first_name,
+        surname=request.surname,
+        other_names=request.other_names,
+        date_of_birth=request.date_of_birth,
+        gender=request.gender,
+        email=request.email,
+        phone=request.phone,
+        home_of_origin=request.home_of_origin,
+        traditional_authority=request.traditional_authority,
+        district=request.district,
+        current_address=request.current_address,
+        marital_status=request.marital_status,
+        spouse_name=request.spouse_name,
+        spouse_contact=request.spouse_contact,
+        date_of_employment=request.date_of_employment,
+        designation_id=designation.designation_id,
+        department_id=department.department_id,
+        grade_id=request.grade_id,
+        role_id=role.role_id,
+        is_head_of_department=is_head_of_department,
+        password_hash=None,  # No password for Google users
+        google_id=request.google_id,
+        profile_photo_url=request.profile_photo_url,
+        status="active",  # Skip verification - Google verified email
+        created_at=get_current_time(),
+        updated_at=get_current_time(),
+        registration_timestamp=to_utc(get_current_time())
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    # Create default notification preferences
+    try:
+        NotificationService.create_default_preferences(db, str(new_user.user_id))
+    except Exception as e:
+        print(f"Failed to create notification preferences: {e}")
+
+    # Send welcome email
+    try:
+        await email_service.send_welcome_email(
+            new_user.email,
+            new_user.first_name,
+            new_user.role.name
+        )
+    except Exception as e:
+        print(f"Failed to send welcome email: {e}")
+
+    # Create JWT token
+    token = create_access_token(data={"sub": new_user.email, "role": new_user.role.name})
+
+    return AuthResponse(
+        success=True,
+        message="Google registration successful",
+        token=token,
+        user={
+            "user_id": str(new_user.user_id),
+            "email": new_user.email,
+            "first_name": new_user.first_name,
+            "surname": new_user.surname,
+            "role": new_user.role.name,
+            "department": new_user.department.name if new_user.department else request.department,
+            "phone": new_user.phone,
+        }
+    )
