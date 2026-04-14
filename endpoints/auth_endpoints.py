@@ -512,6 +512,12 @@ def get_current_user(
                 detail="User not found"
             )
         
+        # Update last login time for token-based authentication
+        # This covers page refreshes, returning to app, etc.
+        user.last_login_at = get_current_time()
+        db.commit()
+        db.refresh(user)
+        
         return user
     except jwt.PyJWTError:
         raise HTTPException(
@@ -908,6 +914,7 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
         google_id=google_id,
         profile_photo_url=profile_photo_url,
         status="active",  # Skip verification - Google verified email
+        last_login_at=get_current_time(),  # Set initial login time for Google users
         created_at=get_current_time(),
         updated_at=get_current_time(),
         registration_timestamp=get_current_time()
