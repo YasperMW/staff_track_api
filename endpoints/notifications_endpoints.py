@@ -1,5 +1,6 @@
 from datetime import datetime
 import uuid
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -8,7 +9,9 @@ from pydantic import BaseModel
 from database import get_db
 from models.db_models import User, Notification, UserFCMToken
 from endpoints.auth_endpoints import get_current_user
-from fcm_service import send_push_notification, send_multicast_push_notification, test_fcm_connectivity
+from fcm_service import send_push_notification, send_multicast_push_notification, test_fcm_connectivity, send_fcm_push_enhanced
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["notifications"])
 
