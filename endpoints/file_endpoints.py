@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, EmployeeFile
+from timezone_config import get_current_time
 
 router = APIRouter()
 
@@ -31,7 +32,7 @@ async def upload_profile_photo(file: UploadFile = File(...)):
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             await f.write(content)
-        file_url = f"uploads/profile_photos/{unique_filename}"
+        file_url = f"profile_photos/{unique_filename}"
         return JSONResponse({
             "success": True,
             "message": "Profile photo uploaded successfully",
@@ -47,13 +48,39 @@ async def upload_profile_photo(file: UploadFile = File(...)):
 @router.get("/uploads/profile_photos/{filename}")
 async def get_profile_photo(filename: str):
     file_path = os.path.join(UPLOAD_DIR, "profile_photos", filename)
-    
+
     if not os.path.exists(file_path):
         raise HTTPException(
             status_code=404,
             detail="File not found"
         )
-    
+
+    return FileResponse(file_path)
+
+@router.get("/profile_photos/{filename}")
+async def get_profile_photo_v2(filename: str):
+    """Serve profile photos - new path without /uploads prefix"""
+    file_path = os.path.join(UPLOAD_DIR, "profile_photos", filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
+
+    return FileResponse(file_path)
+
+@router.get("/employee_files/{filename}")
+async def get_employee_file(filename: str):
+    """Serve employee files"""
+    file_path = os.path.join(UPLOAD_DIR, "employee_files", filename)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
+
     return FileResponse(file_path)
 
 @router.post("/upload/employee-file")
@@ -78,8 +105,8 @@ async def upload_employee_file(
             if size_mb > max_mb:
                 raise HTTPException(status_code=400, detail="File too large")
             await f.write(content)
-        file_url = f"uploads/employee_files/{unique_filename}"
-        rec = EmployeeFile(user_id=current_user.user_id, file_type=file_type, file_url=file_url, upload_date=datetime.utcnow())
+        file_url = f"employee_files/{unique_filename}"
+        rec = EmployeeFile(user_id=current_user.user_id, file_type=file_type, file_url=file_url, upload_date=get_current_time())
         db.add(rec)
         db.commit()
         return {"success": True, "file_url": file_url}
