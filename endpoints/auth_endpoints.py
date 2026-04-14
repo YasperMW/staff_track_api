@@ -183,8 +183,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == request.email).first()
     if user:
         # Check if account is locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
-            remaining_time = (user.locked_until - datetime.utcnow()).seconds // 60
+        if user.locked_until and user.locked_until > get_current_time():
+            remaining_time = (user.locked_until - get_current_time()).seconds // 60
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
@@ -203,7 +203,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         user.locked_until = None
 
         # Update last login
-        user.last_login_at = to_utc(get_current_time())
+        user.last_login_at = get_current_time()
         db.commit()
         db.refresh(user)
         dept_name = user.department.name if user.department else ""
@@ -247,7 +247,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
         # Lock account if too many failed attempts
         if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
-            user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+            user.locked_until = get_current_time() + timedelta(minutes=LOCKOUT_MINUTES)
             db.commit()
 
             # Send account locked notification
@@ -302,8 +302,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if not department:
         department = Department(
             name=request.department,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(department)
         db.commit()
@@ -315,8 +315,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         designation = Designation(
             name=request.designation_id,
             department_id=department.department_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(designation)
         db.commit()
@@ -330,8 +330,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if not role:
         role = Role(
             name=determined_role_name,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(role)
         db.commit()
@@ -383,7 +383,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         status="pending",  # User starts as pending until email verification
         created_at=get_current_time(),
         updated_at=get_current_time(),
-        registration_timestamp=to_utc(get_current_time())
+        registration_timestamp=get_current_time()
     )
     
     db.add(new_user)
@@ -665,7 +665,7 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
         
         # Hash new password and update
         user.password_hash = hash_password(request.new_password)
-        user.updated_at = datetime.utcnow()
+        user.updated_at = get_current_time()
         db.commit()
         
         # Send password change confirmation email and push notification
@@ -753,8 +753,8 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
 
     if user:
         # Check if account is locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
-            remaining_time = (user.locked_until - datetime.utcnow()).seconds // 60
+        if user.locked_until and user.locked_until > get_current_time():
+            remaining_time = (user.locked_until - get_current_time()).seconds // 60
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
@@ -773,7 +773,7 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
             db.commit()
 
         # Update last login
-        user.last_login_at = to_utc(get_current_time())
+        user.last_login_at = get_current_time()
         db.commit()
         db.refresh(user)
 
@@ -807,15 +807,23 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
 @router.post("/google/register", response_model=AuthResponse)
 async def google_register(request: GoogleRegisterRequest, db: Session = Depends(get_db)):
     """Complete Google user registration"""
+    # Verify Google token and extract user info
+    google_data = verify_google_token(request.id_token)
+    email = google_data['email']
+    google_id = google_data['google_id']
+    first_name = google_data['first_name']
+    surname = google_data['surname']
+    profile_photo_url = request.profile_photo_url or google_data.get('profile_photo_url')
+
     # Check if user already exists
     existing_user = db.query(User).filter(
-        (User.email == request.email) |
+        (User.email == email) |
         (User.employee_number == request.employee_number) |
-        (User.google_id == request.google_id)
+        (User.google_id == google_id)
     ).first()
 
     if existing_user:
-        if existing_user.email == request.email:
+        if existing_user.email == email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered"
@@ -825,7 +833,7 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Employee number already registered"
             )
-        if existing_user.google_id == request.google_id:
+        if existing_user.google_id == google_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Google account already registered"
@@ -836,8 +844,8 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
     if not department:
         department = Department(
             name=request.department,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(department)
         db.commit()
@@ -849,8 +857,8 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
         designation = Designation(
             name=request.designation_id,
             department_id=department.department_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(designation)
         db.commit()
@@ -864,8 +872,8 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
     if not role:
         role = Role(
             name=determined_role_name,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=get_current_time(),
+            updated_at=get_current_time(),
         )
         db.add(role)
         db.commit()
@@ -876,12 +884,12 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
         employee_number=request.employee_number,
         national_id=request.national_id,
         suffix=request.suffix,
-        first_name=request.first_name,
-        surname=request.surname,
+        first_name=first_name,
+        surname=surname,
         other_names=request.other_names,
         date_of_birth=request.date_of_birth,
         gender=request.gender,
-        email=request.email,
+        email=email,
         phone=request.phone,
         home_of_origin=request.home_of_origin,
         traditional_authority=request.traditional_authority,
@@ -897,12 +905,12 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
         role_id=role.role_id,
         is_head_of_department=is_head_of_department,
         password_hash=None,  # No password for Google users
-        google_id=request.google_id,
-        profile_photo_url=request.profile_photo_url,
+        google_id=google_id,
+        profile_photo_url=profile_photo_url,
         status="active",  # Skip verification - Google verified email
         created_at=get_current_time(),
         updated_at=get_current_time(),
-        registration_timestamp=to_utc(get_current_time())
+        registration_timestamp=get_current_time()
     )
 
     db.add(new_user)

@@ -18,7 +18,7 @@ import io
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, AttendanceLog, Department, Role
-from timezone_config import get_current_time, to_app_timezone
+from timezone_config import get_current_time, to_app_timezone, format_time, format_time_short, format_date
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -135,7 +135,7 @@ async def get_monthly_attendance_report(
             user_attendance[user_key]["total_hours"] += work_hours
         
         user_attendance[user_key]["records"].append({
-            "date": log.check_in_time.date(),
+            "date": log.check_in_time.date() if log.check_in_time else None,
             "check_in_time": log.check_in_time,
             "check_out_time": log.check_out_time,
             "status": status,
@@ -274,12 +274,12 @@ def generate_pdf_report(
         detailed_data = [["Date", "Check In", "Check Out", "Status", "Hours", "Shift"]]
         
         for record in data.attendance_records:
-            check_in_str = record["check_in_time"].strftime("%H:%M") if record["check_in_time"] else "N/A"
-            check_out_str = record["check_out_time"].strftime("%H:%M") if record["check_out_time"] else "N/A"
+            check_in_str = format_time_short(record["check_in_time"]) if record["check_in_time"] else "N/A"
+            check_out_str = format_time_short(record["check_out_time"]) if record["check_out_time"] else "N/A"
             hours_str = f"{record['work_hours']:.1f}h" if record["work_hours"] > 0 else "N/A"
-            
+
             detailed_data.append([
-                record["date"].strftime("%Y-%m-%d"),
+                record["date"].strftime("%Y-%m-%d") if record["date"] else "N/A",
                 check_in_str,
                 check_out_str,
                 record["status"].replace("_", " ").title(),

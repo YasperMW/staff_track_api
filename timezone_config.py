@@ -20,10 +20,11 @@ def get_current_time() -> datetime:
     return datetime.now(APP_TIMEZONE)
 
 def to_app_timezone(dt: datetime) -> datetime:
-    """Convert any datetime to app timezone"""
+    """Convert any datetime to app timezone.
+    If naive, assume it's already in app timezone (local storage)."""
     if dt.tzinfo is None:
-        # If naive datetime, assume it's UTC
-        dt = pytz.UTC.localize(dt)
+        # Naive datetime - assume it's already in app timezone
+        return dt
     return dt.astimezone(APP_TIMEZONE)
 
 def to_utc(dt: datetime) -> datetime:
@@ -33,10 +34,29 @@ def to_utc(dt: datetime) -> datetime:
         dt = APP_TIMEZONE.localize(dt)
     return dt.astimezone(pytz.UTC)
 
-def format_datetime(dt: datetime, format_str: str = "%Y-%m-%d %H:%M:%S %Z") -> str:
-    """Format datetime in app timezone"""
-    app_dt = to_app_timezone(dt)
-    return app_dt.strftime(format_str)
+def format_datetime(dt: datetime, format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Format datetime for display (times stored in local timezone)"""
+    if dt is None:
+        return None
+    return dt.strftime(format_str)
+
+def format_time(dt: datetime) -> Optional[str]:
+    """Format time for API response (HH:MM:SS)"""
+    if dt is None:
+        return None
+    return dt.strftime("%H:%M:%S")
+
+def format_time_short(dt: datetime) -> Optional[str]:
+    """Format time for API response (HH:MM)"""
+    if dt is None:
+        return None
+    return dt.strftime("%H:%M")
+
+def format_date(dt: datetime) -> Optional[str]:
+    """Format date for API response (YYYY-MM-DD)"""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%d")
 
 def timezone_aware(func):
     """

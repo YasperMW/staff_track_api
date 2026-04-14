@@ -13,7 +13,7 @@ from models.db_models import User, AttendanceLog, Notification, Role, AuditLog
 from models.auth_models import CheckInRequest, CheckOutRequest
 from notification_service import NotificationService
 from mail_service import email_service
-from timezone_config import get_current_time, to_app_timezone, to_utc, timezone_aware, get_day_start, get_day_end, get_year_start
+from timezone_config import get_current_time, to_app_timezone, timezone_aware, get_day_start, get_day_end, get_year_start, format_time, format_time_short, format_date
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -261,8 +261,8 @@ async def check_in(
                         message=f"Check-in location was {dist - rad:.0f}m outside work area",
                         type="security",
                         is_read=False,
-                        created_at=to_utc(current_time),
-                        updated_at=to_utc(current_time)
+                        created_at=current_time,
+                        updated_at=current_time
                     )
                     db.add(notification)
                     db.commit()
@@ -297,16 +297,16 @@ async def check_in(
     print(f"DEBUG: Final location_geo: {location_geo}")
     print(f"DEBUG: Final location_str: {location_str}")
     
-    # Create attendance log
+    # Create attendance log - store local time directly
     attendance = AttendanceLog(
         user_id=current_user.user_id,
-        check_in_time=to_utc(current_time),  # Store as UTC
+        check_in_time=current_time,
         location=location_geo,  # Use PostGIS geography object
         accuracy=accuracy,
         device_id=device_id,
         shift_type=shift_type,
-        created_at=to_utc(current_time),  # Store as UTC
-        updated_at=to_utc(current_time)   # Store as UTC
+        created_at=current_time,
+        updated_at=current_time
     )
     
     print(f"DEBUG: About to save attendance record:")
@@ -378,7 +378,7 @@ async def check_in(
     return {
         "message": "Check-in successful",
         "attendance_log_id": str(attendance.attendance_log_id),
-        "check_in_time": attendance.check_in_time.strftime("%H:%M:%S"),
+        "check_in_time": format_time(attendance.check_in_time),
         "shift_type": attendance.shift_type,
         "location": location_str  # Return string representation
     }
@@ -570,9 +570,9 @@ async def check_out(
     if device_id is not None:
         attendance.device_id = device_id
     
-    # Update check out time
-    attendance.check_out_time = to_utc(current_time)  # Store as UTC
-    attendance.updated_at = to_utc(current_time)   # Store as UTC
+    # Update check out time - store local time directly
+    attendance.check_out_time = current_time
+    attendance.updated_at = current_time
     
     # Determine final shift type based on check-in and check-out times
     check_in_hour = attendance.check_in_time.hour
@@ -605,7 +605,7 @@ async def check_out(
             db=db,
             user_id=str(current_user.user_id),
             title="✅ Check-out Successful",
-            message=f"Checked out at {attendance.check_out_time.strftime('%H:%M')} • {round(work_hours, 1)} hours worked",
+            message=f"Checked out at {format_time_short(attendance.check_out_time)} • {round(work_hours, 1)} hours worked",
             notification_type="attendance",
             data={
                 "type": "check_out_confirmation",
@@ -616,12 +616,12 @@ async def check_out(
             },
             force_send=True
         )
-        
+
         # Create in-app notification
         notification = Notification(
             user_id=current_user.user_id,
             title="✅ Check-out Successful",
-            message=f"You successfully checked out at {attendance.check_out_time.strftime('%H:%M')}. Total hours worked: {round(work_hours, 1)}",
+            message=f"You successfully checked out at {format_time_short(attendance.check_out_time)}. Total hours worked: {round(work_hours, 1)}",
             type="attendance",
             is_read=False,
             created_at=current_time,
@@ -647,7 +647,7 @@ async def check_out(
     return {
         "message": "Check-out successful",
         "attendance_log_id": str(attendance.attendance_log_id),
-        "check_out_time": attendance.check_out_time.strftime("%H:%M:%S"),
+        "check_out_time": format_time(attendance.check_out_time),
         "work_hours": round(work_hours, 2),
         "shift_type": attendance.shift_type,
         "location": location_str
@@ -692,9 +692,9 @@ async def get_today_attendance(
     
     return {
         "attendance_log_id": str(attendance.attendance_log_id),
-        "date": attendance.check_in_time.strftime("%Y-%m-%d"),
-        "check_in_time": attendance.check_in_time.strftime("%H:%M:%S"),
-        "check_out_time": attendance.check_out_time.strftime("%H:%M:%S") if attendance.check_out_time else None,
+        "date": format_date(attendance.check_in_time),
+        "check_in_time": format_time(attendance.check_in_time),
+        "check_out_time": format_time(attendance.check_out_time),
         "location": location_str,
         "work_hours": round(work_hours, 2) if work_hours else None,
         "device_id": attendance.device_id,
@@ -777,9 +777,9 @@ async def get_attendance_history(
         
         result.append({
             "attendance_log_id": str(att.attendance_log_id),
-            "date": att.check_in_time.strftime("%Y-%m-%d"),
-            "check_in_time": att.check_in_time.strftime("%H:%M:%S"),
-            "check_out_time": att.check_out_time.strftime("%H:%M:%S") if att.check_out_time else None,
+            "date": format_date(att.check_in_time),
+            "check_in_time": format_time(att.check_in_time),
+            "check_out_time": format_time(att.check_out_time),
             "location": location_str,
             "work_hours": round(work_hours, 2) if work_hours else None,
             "device_id": att.device_id,
@@ -886,7 +886,7 @@ async def get_team_today_summary(
     
     staff_ids = [u.user_id for u in staff]
     
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     logs = (
@@ -942,7 +942,7 @@ async def get_team_today_list(
     
     staff_ids = [u.user_id for u in staff]
     
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     logs = (
@@ -981,11 +981,11 @@ async def get_team_today_list(
             check_in_time = log.check_in_time
             hour = check_in_time.hour
             status = "Late" if hour >= 9 else "Present"
-            check_in_time_str = check_in_time.strftime("%H:%M:%S")
-        
+            check_in_time_str = format_time(check_in_time)
+
         checkout_dt = latest_checkout_by_user.get(user.user_id)
         if checkout_dt:
-            check_out_time_str = checkout_dt.strftime("%H:%M:%S")
+            check_out_time_str = format_time(checkout_dt)
         
         full_name = f"{user.first_name or ''} {user.surname or ''}".strip()
         role_name = user.role.name if getattr(user, "role", None) else ""
@@ -1028,7 +1028,7 @@ async def get_team_today_summary_v2(
     
     staff_ids = [u.user_id for u in staff]
     
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     logs = (
@@ -1097,7 +1097,7 @@ async def get_team_today_list_v2(
     
     staff_ids = [u.user_id for u in staff]
     
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     logs = (
@@ -1413,7 +1413,7 @@ async def get_recent_check_ins(
         db.query(AttendanceLog)
         .filter(
             AttendanceLog.user_id.in_(staff_ids),
-            AttendanceLog.check_in_time >= (datetime.now() - timedelta(days=7))  # Last 7 days
+            AttendanceLog.check_in_time >= (get_current_time() - timedelta(days=7))  # Last 7 days
         )
         .order_by(desc(AttendanceLog.check_in_time))
         .limit(limit)
