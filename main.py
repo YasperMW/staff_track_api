@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints
-from database import engine
+from database import engine, seed_default_admin
 from models.db_models import Base
 import os
 from dotenv import load_dotenv
@@ -15,6 +15,9 @@ load_dotenv()
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Seed default admin user if database is empty
+seed_default_admin()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
