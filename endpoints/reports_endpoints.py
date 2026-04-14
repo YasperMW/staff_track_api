@@ -131,7 +131,10 @@ async def get_monthly_attendance_report(
         status = calculate_attendance_status(log.check_in_time, log.check_out_time)
         work_hours = 0.0
         if log.check_out_time and log.check_in_time:
-            work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
+            # Convert timezone-aware datetimes to naive for consistent subtraction
+            check_in_naive = log.check_in_time.replace(tzinfo=None) if log.check_in_time.tzinfo else log.check_in_time
+            check_out_naive = log.check_out_time.replace(tzinfo=None) if log.check_out_time.tzinfo else log.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
             user_attendance[user_key]["total_hours"] += work_hours
         
         user_attendance[user_key]["records"].append({

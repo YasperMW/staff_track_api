@@ -680,7 +680,10 @@ async def get_today_attendance(
     # Calculate work hours if checked out
     work_hours = None
     if attendance.check_out_time:
-        work_hours = (attendance.check_out_time - attendance.check_in_time).total_seconds() / 3600.0
+        # Convert timezone-aware datetimes to naive for consistent subtraction
+        check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
+        check_out_naive = attendance.check_out_time.replace(tzinfo=None) if attendance.check_out_time.tzinfo else attendance.check_out_time
+        work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
     
     # Convert PostGIS geography to string for API response
     location_str = None
@@ -765,7 +768,10 @@ async def get_attendance_history(
     for att in attendances:
         work_hours = None
         if att.check_out_time:
-            work_hours = (att.check_out_time - att.check_in_time).total_seconds() / 3600.0
+            # Convert timezone-aware datetimes to naive for consistent subtraction
+            check_in_naive = att.check_in_time.replace(tzinfo=None) if att.check_in_time.tzinfo else att.check_in_time
+            check_out_naive = att.check_out_time.replace(tzinfo=None) if att.check_out_time.tzinfo else att.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
         
         # Convert PostGIS geography to string for API response
         location_str = None
@@ -1055,7 +1061,10 @@ async def get_team_today_summary_v2(
 
         # Calculate work hours for completed shifts
         if log.check_out_time:
-            work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
+            # Convert timezone-aware datetimes to naive for consistent subtraction
+            check_in_naive = log.check_in_time.replace(tzinfo=None) if log.check_in_time.tzinfo else log.check_in_time
+            check_out_naive = log.check_out_time.replace(tzinfo=None) if log.check_out_time.tzinfo else log.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
             total_work_hours += work_hours
 
     present_count = len(earliest_by_user)
@@ -1434,7 +1443,10 @@ async def get_recent_check_ins(
         # Calculate work hours if checked out
         work_hours = None
         if log.check_out_time:
-            work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
+            # Convert timezone-aware datetimes to naive for consistent subtraction
+            check_in_naive = log.check_in_time.replace(tzinfo=None) if log.check_in_time.tzinfo else log.check_in_time
+            check_out_naive = log.check_out_time.replace(tzinfo=None) if log.check_out_time.tzinfo else log.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
         
         # Convert PostGIS geography to string for API response
         location_str = None

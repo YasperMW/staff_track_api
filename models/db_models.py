@@ -177,10 +177,26 @@ class NotificationPreference(Base):
     push_enabled = Column(Boolean, default=True)
     in_app_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+class BroadcastLog(Base):
+    __tablename__ = "broadcast_logs"
+    
+    broadcast_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    broadcast_type = Column(String(20), nullable=False)  # 'simple' or 'advanced'
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=False)
+    notification_type = Column(String(50), nullable=False)
+    target_audience = Column(String(50), nullable=True)  # 'all', 'department', 'role', etc.
+    targeting_criteria = Column(JSONB, nullable=True)  # Detailed targeting criteria used
+    recipients_summary = Column(JSONB, nullable=True)  # Summary of recipients by type
+    fcm_sent = Column(Integer, default=0)
+    fcm_failed = Column(Integer, default=0)
+    fcm_responses = Column(JSONB, nullable=True)  # Detailed FCM response data
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
     
     # Relationships
-    user = relationship("User", foreign_keys=[user_id])
+    creator = relationship("User", foreign_keys=[created_by])
 
 class EmailVerification(Base):
     __tablename__ = "email_verifications"

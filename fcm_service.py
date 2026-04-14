@@ -3,6 +3,8 @@ from firebase_admin import credentials, messaging
 import os
 from typing import List, Optional, Dict, Any
 import logging
+import asyncio
+from firebase_admin.exceptions import FirebaseError
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,71 @@ async def send_push_notification(
         return None
 
 
+async def send_fcm_push_enhanced(
+    token: str, 
+    title: str, 
+    body: str, 
+    data: Optional[dict] = None,
+    priority: str = "high",
+    notification_type: str = None
+) -> Dict[str, Any]:
+    """
+    Enhanced FCM sending function with better error handling and response tracking.
+    Based on the logic from other_app_notification.py.
+    
+    Args:
+        token: The FCM registration token of the target device
+        title: Notification title
+        body: Notification body
+        data: Optional data payload
+        priority: Priority level (high/normal)
+        notification_type: Type of notification for routing
+        
+    Returns:
+        Dict containing the message ID or error information
+    """
+    if not token:
+        raise ValueError("Token cannot be empty")
+    
+    if not _firebase_initialized:
+        logger.error("Firebase not initialized. Cannot send push notification.")
+        return {"success": False, "error": "Firebase not initialized", "status": "Failed to send message"}
+        
+    # Add priority and type to data payload
+    notification_data = data or {}
+    if priority == "high":
+        notification_data["priority"] = "urgent"
+    if notification_type:
+        notification_data["type"] = notification_type
+        
+    message = messaging.Message(
+        notification=messaging.Notification(
+            title=title,
+            body=body,
+        ),
+        token=token,
+        data={k: str(v) for k, v in notification_data.items()},
+        android=_get_android_config(priority, notification_type),
+        apns=_get_apns_config(priority),
+    )
+    
+    try:
+        # Run blocking Firebase call in a thread executor to avoid blocking the event loop
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, messaging.send, message)
+        logger.info(f"Successfully sent message: {response}")
+        return {"success": True, "message_id": response, "status": "Message sent successfully"}
+    except ValueError as e:
+        logger.error(f"Invalid argument error: {e}")
+        return {"success": False, "error": f"Invalid argument: {str(e)}", "status": "Failed to send message"}
+    except FirebaseError as e:
+        logger.error(f"Firebase error: {e}")
+        return {"success": False, "error": f"Firebase error: {str(e)}", "status": "Failed to send message"}
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return {"success": False, "error": f"Unexpected error: {str(e)}", "status": "Failed to send message"}
+
+
 async def send_multicast_push_notification(
     tokens: List[str],
     title: str,
@@ -195,3 +262,65 @@ async def send_multicast_push_notification(
     except Exception as e:
         logger.error(f"Error sending multicast push notification: {e}")
         return MockMulticastResponse(success_count=0, failure_count=len(tokens))
+
+
+async def test_fcm_connectivity():
+    """Test Firebase FCM connectivity and return diagnostic information"""
+    if not _firebase_initialized:
+        return {
+            "status": "error",
+            "message": "Firebase not initialized",
+            "suggestion": "Check Firebase credentials configuration"
+        }
+    
+    try:
+        # Test with a dummy message to a fake token
+        # This will fail with "invalid registration token" but confirms connectivity
+        test_message = messaging.Message(
+            notification=messaging.Notification(
+                title="Connectivity Test",
+                body="This is a connectivity test",
+            ),
+            data={"test": "connectivity"},
+            token="connectivity_test_token_12345",
+        )
+        
+        # This should raise an exception about invalid token, which confirms connectivity
+        messaging.send(test_message)
+        
+    except Exception as e:
+        error_str = str(e).lower()
+        
+        if "registration token is not a valid" in error_str:
+            return {
+                "status": "success",
+                "message": "FCM connectivity confirmed",
+                "details": "Received expected 'invalid token' error, confirming connection to Firebase servers"
+            }
+        elif "remote end closed connection" in error_str or "connection" in error_str:
+            return {
+                "status": "error",
+                "message": "Network connectivity issue",
+                "details": f"Cannot connect to Firebase servers: {e}",
+                "suggestion": "Check network connectivity, firewall settings, and proxy configuration"
+            }
+        elif "404" in error_str or "not found" in error_str:
+            return {
+                "status": "error", 
+                "message": "Firebase endpoint not found (404)",
+                "details": f"Firebase API endpoint returned 404: {e}",
+                "suggestion": "Check Firebase project configuration and service account permissions"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Unexpected FCM error",
+                "details": f"Unexpected error: {e}",
+                "suggestion": "Check Firebase project settings and service account configuration"
+            }
+    
+    return {
+        "status": "unexpected",
+        "message": "Unexpected success in connectivity test",
+        "suggestion": "This should not happen - check the test logic"
+    }

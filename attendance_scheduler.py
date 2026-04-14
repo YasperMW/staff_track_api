@@ -217,7 +217,9 @@ class AttendanceScheduler:
                 return
             
             # Calculate current work hours
-            current_hours = (get_current_time() - attendance.check_in_time).total_seconds() / 3600.0
+            # Convert timezone-aware database datetime to naive for consistent subtraction
+            check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
+            current_hours = (get_current_time() - check_in_naive).total_seconds() / 3600.0
             
             # Get user's FCM tokens
             fcm_tokens = db.query(UserFCMToken).filter(UserFCMToken.user_id == user.user_id).all()
