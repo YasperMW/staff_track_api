@@ -71,70 +71,6 @@ class DepartmentsListResponse(BaseModel):
     departments: List[DepartmentResponse]
     total_count: int
 
-# Department designations mapping
-DEPARTMENT_DESIGNATIONS = {
-    'Emergency Department': [
-        'Emergency Medicine Physician', 'Emergency Nurse', 'Paramedic', 
-        'Emergency Medical Technician', 'Triage Nurse', 'Emergency Department Manager'
-    ],
-    'Intensive Care Unit (ICU)': [
-        'Intensivist', 'ICU Nurse', 'Critical Care Nurse', 'Respiratory Therapist',
-        'ICU Manager', 'Critical Care Physician'
-    ],
-    'Operating Room (OR)': [
-        'Surgeon', 'Anesthesiologist', 'OR Nurse', 'Surgical Technologist',
-        'OR Manager', 'Perioperative Nurse'
-    ],
-    'Medical-Surgical Unit': [
-        'Staff Nurse', 'Charge Nurse', 'Medical-Surgical Nurse', 'Patient Care Technician',
-        'Unit Manager', 'Clinical Nurse Leader'
-    ],
-    'Obstetrics and Gynecology (OB/GYN)': [
-        'Obstetrician', 'Gynecologist', 'OB/GYN Nurse', 'Midwife',
-        'Labor and Delivery Nurse', 'OB/GYN Physician Assistant'
-    ],
-    'Pediatrics': [
-        'Pediatrician', 'Pediatric Nurse', 'Pediatric Nurse Practitioner',
-        'Child Life Specialist', 'Pediatric Medical Assistant'
-    ],
-    'Radiology': [
-        'Radiologist', 'Radiology Technician', 'X-ray Technician',
-        'MRI Technician', 'CT Technician', 'Ultrasound Technician'
-    ],
-    'Laboratory': [
-        'Lab Technician', 'Lab Manager', 'Medical Technologist',
-        'Lab Scientist', 'Phlebotomist', 'Quality Assurance Officer'
-    ],
-    'Pharmacy': [
-        'Pharmacist', 'Pharmacy Technician', 'Pharmacy Manager',
-        'Clinical Pharmacist', 'Dispensing Technician', 'Inventory Officer'
-    ],
-    'Physical Therapy': [
-        'Physical Therapist', 'Physical Therapy Assistant', 'Rehabilitation Manager',
-        'Sports Medicine Specialist', 'Occupational Therapist'
-    ],
-    'Administration': [
-        'Hospital Administrator', 'Administrative Officer', 'Executive Assistant',
-        'Office Manager', 'Administrative Secretary', 'Records Officer'
-    ],
-    'Finance': [
-        'Accountant', 'Financial Controller', 'Billing Officer',
-        'Finance Manager', 'Payroll Officer', 'Accounts Clerk'
-    ],
-    'Human Resources': [
-        'HR Manager', 'HR Officer', 'Recruitment Officer',
-        'Training Officer', 'HR Assistant', 'Compensation Specialist'
-    ],
-    'Information Technology (IT)': [
-        'IT Manager', 'System Administrator', 'Network Administrator',
-        'Database Administrator', 'Software Developer', 'IT Support Technician'
-    ],
-    'Marketing and Communications': [
-        'Marketing Manager', 'Communications Director', 'Public Relations Officer',
-        'Content Creator', 'Social Media Manager', 'Brand Manager'
-    ]
-}
-
 @router.get("/roles", response_model=RolesListResponse)
 async def get_all_roles(db: Session = Depends(get_db)):
     """
@@ -172,14 +108,17 @@ async def get_all_departments(db: Session = Depends(get_db)):
     Get all available departments with their designations from the database.
     """
     try:
-        # Simple query without relationships
         departments = db.execute(text("SELECT department_id, name, description, created_at FROM departments WHERE deleted_at IS NULL")).fetchall()
-        
+
         department_responses = []
         for dept in departments:
-            # Get designations for this department from mapping
-            designations = DEPARTMENT_DESIGNATIONS.get(dept[1], [])
-            
+            # Get designations for this department from the database
+            designations_result = db.execute(
+                text("SELECT name FROM designations WHERE department_id = :department_id AND deleted_at IS NULL ORDER BY name"),
+                {"department_id": dept[0]}
+            ).fetchall()
+            designations = [d[0] for d in designations_result]
+
             dept_data = DepartmentResponse(
                 department_id=str(dept[0]),
                 name=dept[1],
@@ -188,14 +127,14 @@ async def get_all_departments(db: Session = Depends(get_db)):
                 designations=designations
             )
             department_responses.append(dept_data)
-        
+
         return DepartmentsListResponse(
             success=True,
             message=f"Successfully retrieved {len(department_responses)} departments",
             departments=department_responses,
             total_count=len(department_responses)
         )
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

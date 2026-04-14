@@ -1049,22 +1049,22 @@ async def get_team_today_summary_v2(
         uid = log.user_id
         if uid not in earliest_by_user or log.check_in_time < earliest_by_user[uid]:
             earliest_by_user[uid] = log
-        
+
         # Calculate work hours for completed shifts
         if log.check_out_time:
             work_hours = (log.check_out_time - log.check_in_time).total_seconds() / 3600.0
             total_work_hours += work_hours
-    
+
     present_count = len(earliest_by_user)
     late_count = 0
-    
-    for dt in earliest_by_user.values():
-        if dt.hour >= 9:
+
+    for log in earliest_by_user.values():
+        if log.check_in_time.hour >= 9:
             late_count += 1
-    
+
     total_staff = len(staff)
     absent_count = total_staff - present_count
-    
+
     return {
         "total_staff": total_staff,
         "present": present_count,
