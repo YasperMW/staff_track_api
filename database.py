@@ -36,10 +36,43 @@ def create_database_if_not_exists():
                 conn.execute(text(f'CREATE DATABASE "{database_name}"'))
                 print(f"Database '{database_name}' created successfully.")
     except Exception as e:
-        print(f"Error checking/creating database: {e}")
-        raise
+        error_msg = str(e)
+        if "permission denied" in error_msg.lower() or "insufficientprivilege" in error_msg.lower():
+            print(f"Warning: Cannot create database '{database_name}' - user lacks CREATEDB permission.")
+            print(f"Please create the database manually or grant CREATEDB permission to the user.")
+            print(f"Run: CREATE DATABASE \"{database_name}\"; as a superuser, or: ALTER USER your_user CREATEDB;")
+        else:
+            print(f"Error checking/creating database: {e}")
+            raise
     finally:
         temp_engine.dispose()
+
+
+def create_extensions():
+    """Create required PostgreSQL extensions (PostGIS, uuid-ossp)."""
+    try:
+        with engine.connect() as conn:
+            # Create PostGIS extension for geography types
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+            # Create uuid-ossp extension for UUID generation
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""))
+            conn.commit()
+            print("PostgreSQL extensions (postgis, uuid-ossp) created/verified successfully.")
+    except Exception as e:
+        error_msg = str(e)
+        if "could not open extension control file" in error_msg.lower():
+            print("Error: PostGIS extension is not installed on the PostgreSQL server.")
+            print("Please install PostGIS on your PostgreSQL server first.")
+            print("On Ubuntu/Debian: sudo apt-get install postgresql-<version>-postgis-3")
+            print("On macOS with Homebrew: brew install postgis")
+            raise
+        elif "permission denied" in error_msg.lower():
+            print("Warning: Cannot create extensions - user lacks permission.")
+            print("Please run as superuser: CREATE EXTENSION postgis; CREATE EXTENSION \"uuid-ossp\";")
+            raise
+        else:
+            print(f"Error creating extensions: {e}")
+            raise
 
 
 # Ensure database exists before creating engine
@@ -56,6 +89,9 @@ engine = create_engine(
     echo=False              # Disable SQL logging in production
 )
 
+# Create required extensions before tables
+create_extensions()
+
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -69,11 +105,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-# Ensure PostGIS extension exists for geography types
-try:
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
-        conn.commit()
-except Exception:
-    pass
