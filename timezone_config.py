@@ -16,16 +16,19 @@ DEFAULT_TIMEZONE = os.getenv("APP_TIMEZONE", "Africa/Blantyre")
 APP_TIMEZONE = pytz.timezone(DEFAULT_TIMEZONE)
 
 def get_current_time() -> datetime:
-    """Get current timezone-aware datetime in app timezone"""
-    return datetime.now(APP_TIMEZONE)
+    """Get current datetime in app timezone (naive, for database storage)"""
+    # Return naive datetime so PostgreSQL stores it as-is without UTC conversion
+    return datetime.now(APP_TIMEZONE).replace(tzinfo=None)
 
 def to_app_timezone(dt: datetime) -> datetime:
     """Convert any datetime to app timezone.
-    If naive, assume it's already in app timezone (local storage)."""
+    If naive, assume it's already in app timezone."""
+    if dt is None:
+        return None
     if dt.tzinfo is None:
-        # Naive datetime - assume it's already in app timezone
+        # Naive datetime - already in app timezone
         return dt
-    return dt.astimezone(APP_TIMEZONE)
+    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
 
 def to_utc(dt: datetime) -> datetime:
     """Convert datetime to UTC for database storage"""
@@ -35,7 +38,7 @@ def to_utc(dt: datetime) -> datetime:
     return dt.astimezone(pytz.UTC)
 
 def format_datetime(dt: datetime, format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
-    """Format datetime for display (times stored in local timezone)"""
+    """Format datetime for display (already in app timezone)"""
     if dt is None:
         return None
     return dt.strftime(format_str)
