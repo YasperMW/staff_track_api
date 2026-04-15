@@ -25,10 +25,8 @@ def to_app_timezone(dt: datetime) -> datetime:
     If naive, assume it's already in app timezone."""
     if dt is None:
         return None
-    if dt.tzinfo is None:
-        # Naive datetime - already in app timezone
-        return dt
-    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
+    
+    return dt.replace(tzinfo=None)
 
 def to_utc(dt: datetime) -> datetime:
     """Convert datetime to UTC for database storage"""

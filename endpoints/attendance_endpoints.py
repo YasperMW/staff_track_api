@@ -26,6 +26,8 @@ async def get_my_profile_metrics(
     Return year-to-date metrics for the current user:
     - working_days: distinct days with a check-in
     - on_time_rate: percentage of present days with first check-in before 09:00
+    - on_time_days: number of present days with first check-in before 09:00
+    - late_days: number of present days with first check-in at/after 09:00
     - leave_used: total approved leave days in the year (inclusive)
     """
     now = get_current_time()
@@ -60,6 +62,7 @@ async def get_my_profile_metrics(
         if first_dt.hour < 9:
             on_time_count += 1
     on_time_rate = round((on_time_count / working_days) * 100.0, 1) if working_days > 0 else 0.0
+    late_days = max(working_days - on_time_count, 0)
 
     # Calculate approved leave days YTD from requests table
     leave_used_days = 0
@@ -94,6 +97,8 @@ async def get_my_profile_metrics(
     return {
         "working_days": working_days,
         "on_time_rate": on_time_rate,
+        "on_time_days": on_time_count,
+        "late_days": late_days,
         "leave_used": leave_used_days,
         "year": year_start.year,
     }
