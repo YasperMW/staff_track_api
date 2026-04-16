@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from models.auth_models import LoginRequest, RegisterRequest, AuthResponse, ResetPasswordRequest, OTPRequest, OTPVerifyRequest, OTPResponse, ConfirmPasswordResetRequest, GoogleAuthRequest, GoogleCheckResponse, GoogleRegisterRequest
+from models.auth_models import LoginRequest, RegisterRequest, AuthResponse, ResetPasswordRequest, OTPRequest, OTPVerifyRequest, OTPResponse, ConfirmPasswordResetRequest, ChangePasswordRequest, GoogleAuthRequest, GoogleCheckResponse, GoogleRegisterRequest
 from models.db_models import User, Role, Department, Designation, EmailVerification, Grade
 from typing import Optional, List
 import hashlib
@@ -714,6 +714,85 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset password"
+        ) from e
+
+@router.post("/change-password", response_model=AuthResponse)
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Change password for authenticated user"""
+    try:
+        # Verify current password
+        if not verify_password(request.current_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect"
+            )
+        
+        # Validate new password
+        if len(request.new_password) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password must be at least 8 characters long"
+            )
+        
+        # Check if new password is same as current password
+        if verify_password(request.new_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password cannot be the same as current password"
+            )
+        
+        # Update password
+        current_user.password_hash = hash_password(request.new_password)
+        current_user.updated_at = get_current_time()
+        db.commit()
+        
+        # Send password change confirmation email and push notification
+        try:
+            await email_service.send_password_change_email(
+                current_user.email, 
+                current_user.first_name
+            )
+        except Exception as e:
+            # Log error but don't fail the password change
+            print(f"Failed to send password change confirmation email: {e}")
+
+        # Send push notification for password change
+        try:
+            if current_user.fcm_tokens:
+                for token_record in current_user.fcm_tokens:
+                    await send_push_notification(
+                        token=token_record.fcm_token,
+                        title="Password Changed",
+                        body="Your password has been successfully changed. If you didn't do this, please contact support immediately.",
+                        data={
+                            "type": "security_alert",
+                            "action": "password_changed"
+                        }
+                    )
+        except Exception as e:
+            print(f"Failed to send password change push notification: {e}")
+        
+        return AuthResponse(
+            success=True,
+            message="Password changed successfully",
+            token=None,
+            user={
+                "email": current_user.email,
+                "first_name": current_user.first_name,
+                "surname": current_user.surname,
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to change password"
         ) from e
 
 

@@ -17,6 +17,166 @@ from timezone_config import get_current_time, to_app_timezone, timezone_aware, g
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
+# Database-driven Shift Time Definitions
+class ShiftTimes:
+    """Database-driven shift time ranges and classifications"""
+    
+    _configurations = {}
+    _loaded = False
+    
+    @classmethod
+    def _load_configurations(cls, db: Session):
+        """Load shift configurations from database"""
+        if cls._loaded:
+            return
+        
+        from models.db_models import ShiftConfiguration
+        
+        configs = db.query(ShiftConfiguration).filter(
+            ShiftConfiguration.is_active == True
+        ).all()
+        
+        for config in configs:
+            cls._configurations[config.shift_type] = {
+                'check_in_earliest': config.check_in_earliest,
+                'check_in_latest': config.check_in_latest,
+                'official_start': config.official_start_time,
+                'official_end': config.official_end_time,
+                'check_out_earliest': config.check_out_earliest,
+                'check_out_latest': config.check_out_latest,
+                'extended_start': config.extended_start_time,
+                'late_threshold': config.late_threshold,
+            }
+        
+        cls._loaded = True
+    
+    @classmethod
+    def get_config(cls, shift_type: str, db: Session):
+        """Get configuration for a specific shift type"""
+        cls._load_configurations(db)
+        return cls._configurations.get(shift_type)
+    
+    @classmethod
+    def determine_shift_type(cls, check_time: datetime, db: Session) -> str:
+        """Determine shift type based on check-in time using database configs"""
+        cls._load_configurations(db)
+        
+        hour = check_time.hour
+        minute = check_time.minute
+        
+        # Get day shift configuration to determine start time
+        day_config = cls._configurations.get('Day Shift')
+        if day_config:
+            day_start_hour = day_config['official_start'].hour
+            day_start_minute = day_config['official_start'].minute
+        
+        # Day shift: from earliest check-in until night shift starts
+        if (hour > 6) or (hour == 6 and minute >= 0):
+            if (hour < 16) or (hour == 16 and minute < 30):
+                return "Day Shift"
+        
+        # Night shift: 16:30 to 05:59 (next day)
+        return "Night Shift"
+    
+    @classmethod
+    def classify_check_in(cls, check_time: datetime, shift_type: str, db: Session) -> dict:
+        """Classify check-in as early, on-time, or late using database configs"""
+        hour = check_time.hour
+        minute = check_time.minute
+        current_time = time(hour, minute)
+        
+        result = {
+            "is_late": False,
+            "is_early": False,
+            "classification": "on_time",
+            "requires_reason": False
+        }
+        
+        config = cls.get_config(shift_type, db)
+        if not config:
+            return result
+        
+        if shift_type == "Day Shift":
+            if current_time < config['check_in_earliest']:
+                result["classification"] = "early"
+                result["is_early"] = True
+                result["requires_reason"] = True
+            elif current_time > config['check_in_latest']:
+                result["classification"] = "late"
+                result["is_late"] = True
+                result["requires_reason"] = True
+            else:
+                result["classification"] = "on_time"
+                
+        elif shift_type == "Night Shift":
+            # For night shift, use late threshold from config
+            if current_time > config['late_threshold']:
+                result["classification"] = "late"
+                result["is_late"] = True
+                result["requires_reason"] = True
+            else:
+                result["classification"] = "on_time"
+        
+        return result
+    
+    @classmethod
+    def classify_check_out(cls, check_time: datetime, shift_type: str, check_in_time: datetime, db: Session) -> dict:
+        """Classify check-out as early, on-time, or extended using database configs"""
+        hour = check_time.hour
+        minute = check_time.minute
+        current_time = time(hour, minute)
+        
+        result = {
+            "is_early": False,
+            "is_extended": False,
+            "classification": "on_time",
+            "requires_reason": False
+        }
+        
+        config = cls.get_config(shift_type, db)
+        if not config:
+            return result
+        
+        if shift_type == "Day Shift":
+            if current_time < config['check_out_earliest']:
+                result["classification"] = "early"
+                result["is_early"] = True
+                result["requires_reason"] = True
+            elif current_time > config['check_out_latest']:
+                result["classification"] = "extended"
+                result["is_extended"] = True
+            else:
+                result["classification"] = "on_time"
+                
+        elif shift_type == "Night Shift":
+            # For night shift, need to consider if it spans midnight
+            if check_in_time.hour >= 16:  # Started in evening (16:30 or later)
+                if current_time < config['check_out_earliest']:
+                    result["classification"] = "early"
+                    result["is_early"] = True
+                    result["requires_reason"] = True
+                elif current_time > config['check_out_latest']:
+                    result["classification"] = "extended"
+                    result["is_extended"] = True
+                else:
+                    result["classification"] = "on_time"
+            else:
+                # Started in early morning (continuation from previous night)
+                # For continuation shifts, we don't consider it early since they're completing shift
+                result["classification"] = "on_time"
+        
+        return result
+    
+    @classmethod
+    def get_final_shift_type(cls, initial_shift: str, check_in_time: datetime, check_out_time: datetime, db: Session) -> str:
+        """Determine final shift type including extended status"""
+        checkout_classification = cls.classify_check_out(check_out_time, initial_shift, check_in_time, db)
+        
+        if checkout_classification["is_extended"]:
+            return f"{initial_shift} → Extended"
+        else:
+            return initial_shift
+
 @router.get("/my-profile-metrics")
 async def get_my_profile_metrics(
     db: Session = Depends(get_db),
@@ -157,17 +317,26 @@ async def check_in(
             detail="Already checked in today. Please check out first."
         )
     
-    # Determine shift if not provided
+    # Determine shift if not provided using centralized logic
     if not shift_type:
-        check_in_hour = current_time.hour
-        check_in_minute = current_time.minute
-        
-        # Day shift: 07:30 to 16:30
-        if (check_in_hour >= 7 and check_in_hour < 16) or (check_in_hour == 7 and check_in_minute >= 30):
-            shift_type = "Day Shift"
-        # Night shift: 16:30 to 07:30 (next day)
-        else:
-            shift_type = "Night Shift"
+        shift_type = ShiftTimes.determine_shift_type(current_time, db)
+
+    # Classify check-in using centralized logic
+    late_reason = request.late_reason
+    check_in_classification = ShiftTimes.classify_check_in(current_time, shift_type, db)
+    
+    if check_in_classification["requires_reason"] and not late_reason:
+        classification = check_in_classification["classification"]
+        if classification == "late":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Late check-in detected. Please provide a reason for arriving late."
+            )
+        elif classification == "early":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Early check-in detected. Please provide a reason for arriving early."
+            )
     
     # Create location as PostGIS geography if lat/lng provided
     location_geo = None
@@ -310,6 +479,7 @@ async def check_in(
         accuracy=accuracy,
         device_id=device_id,
         shift_type=shift_type,
+        late_reason=late_reason,  # Store late check-in reason if provided
         created_at=current_time,
         updated_at=current_time
     )
@@ -440,7 +610,24 @@ async def check_out(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No active check-in record found for today"
         )
+
+    # Classify check-out using centralized logic
+    early_checkout_reason = request.early_checkout_reason
+    shift_type = attendance.shift_type or "Day Shift"  # Default to Day Shift if not set
     
+    # Extract base shift type (remove "→ Extended" if present)
+    base_shift_type = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
+    
+    check_out_classification = ShiftTimes.classify_check_out(current_time, base_shift_type, attendance.check_in_time, db)
+    
+    if check_out_classification["requires_reason"] and not early_checkout_reason:
+        classification = check_out_classification["classification"]
+        if classification == "early":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Early check-out detected. Please provide a reason for leaving early."
+            )
+
     # Update location if provided and check geofence
     location_geo = None
     location_str = None
@@ -577,23 +764,12 @@ async def check_out(
     
     # Update check out time - store local time directly
     attendance.check_out_time = current_time
+    attendance.early_checkout_reason = early_checkout_reason  # Store early checkout reason if provided
     attendance.updated_at = current_time
     
-    # Determine final shift type based on check-in and check-out times
-    check_in_hour = attendance.check_in_time.hour
-    check_out_hour = attendance.check_out_time.hour
-    
-    # Day shift: 07:30 to 16:30
-    if (check_in_hour >= 7 and check_in_hour < 16) or (check_in_hour == 7 and attendance.check_in_time.minute >= 30):
-        initial_shift = "Day Shift"
-    else:
-        initial_shift = "Night Shift"
-    
-    # Check if worked across shift boundary (extended shift)
-    if (check_out_hour >= 16 and initial_shift == "Day Shift") or (check_out_hour < 7 and initial_shift == "Night Shift"):
-        attendance.shift_type = f"{initial_shift} → Extended"
-    else:
-        attendance.shift_type = initial_shift
+    # Determine final shift type using centralized logic
+    initial_shift = ShiftTimes.determine_shift_type(attendance.check_in_time, db)
+    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, attendance.check_in_time, current_time, db)
     
     # Calculate and store work hours
     # Ensure both datetimes are naive for subtraction

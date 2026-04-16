@@ -210,3 +210,161 @@ def seed_default_admin():
         db.rollback()
     finally:
         db.close()
+
+
+def run_database_migrations():
+    """Run database migrations to add new columns if they don't exist."""
+    try:
+        with engine.connect() as conn:
+            # Add late_reason column to attendance_logs
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'attendance_logs'
+                        AND column_name = 'late_reason'
+                    ) THEN
+                        ALTER TABLE attendance_logs ADD COLUMN late_reason TEXT;
+                        RAISE NOTICE 'Added late_reason column to attendance_logs';
+                    END IF;
+                END $$;
+            """))
+
+            # Add early_checkout_reason column to attendance_logs
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'attendance_logs'
+                        AND column_name = 'early_checkout_reason'
+                    ) THEN
+                        ALTER TABLE attendance_logs ADD COLUMN early_checkout_reason TEXT;
+                        RAISE NOTICE 'Added early_checkout_reason column to attendance_logs';
+                    END IF;
+                END $$;
+            """))
+
+            # Create shift_configurations table
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.tables 
+                        WHERE table_name = 'shift_configurations'
+                    ) THEN
+                        CREATE TABLE IF NOT EXISTS public.shift_configurations (
+                            shift_config_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                            shift_name VARCHAR(50) NOT NULL UNIQUE,
+                            shift_type VARCHAR(20) NOT NULL CHECK (shift_type IN ('Day Shift', 'Night Shift')),
+                            
+                            -- Check-in time ranges
+                            check_in_earliest TIME NOT NULL DEFAULT '06:00:00',
+                            check_in_latest TIME NOT NULL DEFAULT '07:45:00',
+                            official_start_time TIME NOT NULL DEFAULT '07:30:00',
+                            
+                            -- Check-out time ranges  
+                            check_out_earliest TIME NOT NULL DEFAULT '16:00:00',
+                            check_out_latest TIME NOT NULL DEFAULT '17:30:00',
+                            official_end_time TIME NOT NULL DEFAULT '16:30:00',
+                            
+                            -- Extended shift threshold
+                            extended_start_time TIME NOT NULL DEFAULT '17:30:00',
+                            
+                            -- Late check-in threshold (for requiring reasons)
+                            late_threshold TIME NOT NULL DEFAULT '09:00:00',
+                            
+                            -- Status and metadata
+                            is_active BOOLEAN NOT NULL DEFAULT true,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            created_by UUID REFERENCES public.users(user_id),
+                            updated_by UUID REFERENCES public.users(user_id),
+                            
+                            -- Description for HR reference
+                            description TEXT
+                        );
+                        
+                        -- Create indexes
+                        CREATE INDEX IF NOT EXISTS idx_shift_configurations_type ON public.shift_configurations(shift_type);
+                        CREATE INDEX IF NOT EXISTS idx_shift_configurations_active ON public.shift_configurations(is_active);
+                        
+                        -- Add trigger for updated_at
+                        CREATE TRIGGER update_shift_configurations_timestamp 
+                            BEFORE UPDATE ON public.shift_configurations
+                            FOR EACH ROW
+                            EXECUTE FUNCTION public.update_timestamp();
+                        
+                        RAISE NOTICE 'Created shift_configurations table';
+                    END IF;
+                END $$;
+            """))
+
+            # Insert default shift configurations
+            conn.execute(text("""
+                INSERT INTO public.shift_configurations (
+                    shift_config_id,
+                    shift_name,
+                    shift_type,
+                    check_in_earliest,
+                    check_in_latest,
+                    official_start_time,
+                    check_out_earliest,
+                    check_out_latest,
+                    official_end_time,
+                    extended_start_time,
+                    late_threshold,
+                    is_active,
+                    created_at,
+                    updated_at,
+                    created_by,
+                    updated_by,
+                    description
+                ) VALUES 
+                (
+                    uuid_generate_v4(),
+                    'Standard Day Shift',
+                    'Day Shift',
+                    '06:00:00',
+                    '07:45:00',
+                    '07:30:00',
+                    '16:00:00',
+                    '17:30:00',
+                    '16:30:00',
+                    '17:30:00',
+                    '09:00:00',
+                    true,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP,
+                    NULL,
+                    NULL,
+                    'Standard day shift with flexible check-in/out times'
+                ),
+                (
+                    uuid_generate_v4(),
+                    'Standard Night Shift',
+                    'Night Shift',
+                    '16:30:00',
+                    '23:59:59',
+                    '16:30:00',
+                    '06:00:00',
+                    '08:00:00',
+                    '07:30:00',
+                    '08:00:00',
+                    '18:00:00',
+                    true,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP,
+                    NULL,
+                    NULL,
+                    'Standard night shift spanning midnight'
+                )
+                ON CONFLICT (shift_name) DO NOTHING;
+            """))
+
+            conn.commit()
+            print("Database migrations completed successfully.")
+    except Exception as e:
+        print(f"Warning: Database migration check failed: {e}")
+        print("This is normal if columns already exist.")

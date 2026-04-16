@@ -982,6 +982,39 @@ class EmailService:
                 detail="Failed to send password reset email",
             ) from exc
  
+    async def send_password_change_email(self, email: str, first_name: str) -> None:
+        """Send password change confirmation email"""
+        from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
+        
+        body_html = f'''
+<h1 style="font-size: 28px; color: #1f2937; margin: 0 0 24px; font-weight: 600;">Password Changed Successfully</h1>
+<p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">Hi {first_name},<br><br>Your Staff Track account password has been successfully changed. You can now log in with your new password.</p>
+<div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 16px; border-radius: 6px; margin: 32px 0; text-align: left;">
+    <p style="font-size: 14px; color: #7f1d1d; margin: 0; font-weight: 500;">🔒 Security Tip</p>
+    <p style="font-size: 14px; color: #991b1b; margin: 8px 0 0; line-height: 1.5;">If you did not request this password change, please reset your password immediately and contact our support team.</p>
+</div>
+<div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">Need help? contact our support team <a href='mailto:hr@stjohnshospital.com'>hr@stjohnshospital.com</a>.</p>
+</div>
+'''
+        html_body = self.build_email_html('Your Staff Track Password Has Been Changed', body_html)
+        
+        try:
+            params = {
+                "from": from_email,
+                "to": [email],
+                "subject": "Your Staff Track Password Has Been Changed",
+                "html": html_body
+            }
+            
+            resend.Emails.send(params)
+        except Exception as exc:
+            logger.error("Failed to send password change email to %s: %s", email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send password change email",
+            ) from exc
+ 
     def otp_expiry(self) -> datetime:
         """Return the expiry datetime for a new OTP code."""
 

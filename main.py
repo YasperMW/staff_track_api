@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints
-from database import engine, seed_default_admin
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints
+from database import engine, seed_default_admin, run_database_migrations
 from models.db_models import Base
 import os
 from dotenv import load_dotenv
@@ -15,6 +15,9 @@ load_dotenv()
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Run database migrations (add new columns if they don't exist)
+run_database_migrations()
 
 # Seed default admin user if database is empty
 seed_default_admin()
@@ -105,6 +108,7 @@ app.include_router(leave_endpoints.router, prefix="/api", tags=["leave"])
 app.include_router(leave_policy_endpoints.router, tags=["leave"])
 app.include_router(notification_preferences_endpoints.router, tags=["notification-preferences"])
 app.include_router(reports_endpoints.router, tags=["reports"])
+app.include_router(shift_config_endpoints.router, tags=["shift-configurations"])
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

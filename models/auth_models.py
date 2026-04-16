@@ -41,6 +41,7 @@ class CheckInRequest(BaseModel):
     accuracy: Optional[float] = None
     device_id: Optional[str] = None
     shift_type: Optional[str] = None
+    late_reason: Optional[str] = None  # Required if checking in late (after 09:00)
 
 class CheckOutRequest(BaseModel):
     location: Optional[str] = None
@@ -48,6 +49,7 @@ class CheckOutRequest(BaseModel):
     longitude: Optional[float] = None
     accuracy: Optional[float] = None
     device_id: Optional[str] = None
+    early_checkout_reason: Optional[str] = None  # Required if checking out early (before shift end)
 
 class AuthResponse(BaseModel):
     success: bool
@@ -80,6 +82,10 @@ class OTPVerifyRequest(BaseModel):
 class ConfirmPasswordResetRequest(BaseModel):
     email: EmailStr
     otp_code: str
+    new_password: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
     new_password: str
 
 class OTPResponse(BaseModel):

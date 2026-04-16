@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from geoalchemy2 import Geography
 from database import Base
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
 class User(Base):
     __tablename__ = "users"
@@ -117,7 +117,7 @@ class Department(Base):
 
 class AttendanceLog(Base):
     __tablename__ = "attendance_logs"
-    
+
     attendance_log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
     check_in_time = Column(DateTime(timezone=True))
@@ -126,6 +126,8 @@ class AttendanceLog(Base):
     accuracy = Column(Numeric(6, 2))
     device_id = Column(String(100))
     shift_type = Column(String(50))  # New field for shift tracking
+    late_reason = Column(Text)  # Reason for late check-in (after 09:00)
+    early_checkout_reason = Column(Text)  # Reason for early check-out (before shift end)
     work_hours = Column(Numeric(5, 2))  # Pre-calculated work hours
     offline_flag = Column(Boolean, default=False)
     sync_time = Column(DateTime(timezone=True))
@@ -133,7 +135,7 @@ class AttendanceLog(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False)
     deleted_at = Column(DateTime(timezone=True))
     deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
-    
+
     # Relationships
     user = relationship("User", foreign_keys=[user_id])
 
@@ -389,3 +391,36 @@ class EmployeeFile(Base):
     deleted_at = Column(DateTime(timezone=True))
     deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
     user = relationship("User", foreign_keys=[user_id])
+
+class ShiftConfiguration(Base):
+    __tablename__ = "shift_configurations"
+    
+    shift_config_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_name = Column(String(50), nullable=False, unique=True)
+    shift_type = Column(String(20), nullable=False)  # 'Day Shift' or 'Night Shift'
+    
+    # Check-in time ranges
+    check_in_earliest = Column(Time, nullable=False, default=time(6, 0))
+    check_in_latest = Column(Time, nullable=False, default=time(7, 45))
+    official_start_time = Column(Time, nullable=False, default=time(7, 30))
+    
+    # Check-out time ranges  
+    check_out_earliest = Column(Time, nullable=False, default=time(16, 0))
+    check_out_latest = Column(Time, nullable=False, default=time(17, 30))
+    official_end_time = Column(Time, nullable=False, default=time(16, 30))
+    
+    # Extended shift threshold
+    extended_start_time = Column(Time, nullable=False, default=time(17, 30))
+    
+    # Late check-in threshold (for requiring reasons)
+    late_threshold = Column(Time, nullable=False, default=time(9, 0))
+    
+    # Status and metadata
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    updated_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    
+    # Description for HR reference
+    description = Column(Text)
