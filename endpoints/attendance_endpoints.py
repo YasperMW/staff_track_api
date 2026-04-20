@@ -319,7 +319,28 @@ async def check_in(
         )
     shift_type = server_shift_type
     
-    existing_attendance = db.query(AttendanceLog).filter(
+    # Check for existing attendance of the same shift type for today (regardless of check-out status)
+    existing_same_shift_attendance = db.query(AttendanceLog).filter(
+        and_(
+            AttendanceLog.user_id == current_user.user_id,
+            AttendanceLog.check_in_time >= today_start,
+            AttendanceLog.check_in_time <= today_end,
+            AttendanceLog.shift_type.like(f"{shift_type.split(' → ')[0] if ' → ' in shift_type else shift_type}%")
+        )
+    ).first()
+    
+    if existing_same_shift_attendance:
+        existing_shift = existing_same_shift_attendance.shift_type or "Day Shift"
+        existing_base_shift = existing_shift.split(" → ")[0] if " → " in existing_shift else existing_shift
+        current_base_shift = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
+        
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Already checked in for {existing_base_shift} today. Only one check-in per shift type per day is allowed."
+        )
+    
+    # Check for active check-ins (not checked out) to allow different shift types
+    active_attendance = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
             AttendanceLog.check_in_time >= today_start,
@@ -328,22 +349,22 @@ async def check_in(
         )
     ).first()
     
-    if existing_attendance:
-        # Check if existing check-in is for the same shift type
-        existing_shift = existing_attendance.shift_type or "Day Shift"
-        existing_base_shift = existing_shift.split(" → ")[0] if " → " in existing_shift else existing_shift
+    if active_attendance:
+        # Check if active check-in is for a different shift type
+        active_shift = active_attendance.shift_type or "Day Shift"
+        active_base_shift = active_shift.split(" → ")[0] if " → " in active_shift else active_shift
         
         # Extract base shift type from current shift (remove "→ Extended" if present)
         current_base_shift = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
         
-        if existing_base_shift == current_base_shift:
+        if active_base_shift != current_base_shift:
+            print(f"ALLOWING DOUBLE SHIFT: {active_base_shift} + {current_base_shift}")
+        else:
+            # This should not happen due to the earlier check, but added as safety
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Already checked in for {existing_base_shift}. Please check out first."
+                detail=f"Already checked in for {active_base_shift}. Please check out first."
             )
-        # Allow double shift (different shift types)
-        else:
-            print(f"ALLOWING DOUBLE SHIFT: {existing_base_shift} + {current_base_shift}")
     
     
     # Classify check-in using centralized logic
