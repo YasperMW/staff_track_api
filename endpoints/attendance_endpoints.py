@@ -162,8 +162,16 @@ class ShiftTimes:
                     result["classification"] = "on_time"
             else:
                 # Started in early morning (continuation from previous night)
-                # For continuation shifts, we don't consider it early since they're completing shift
-                result["classification"] = "on_time"
+                # For continuation shifts, still check if it's early checkout
+                if current_time < config['check_out_earliest']:
+                    result["classification"] = "early"
+                    result["is_early"] = True
+                    result["requires_reason"] = True
+                elif current_time > config['check_out_latest']:
+                    result["classification"] = "extended"
+                    result["is_extended"] = True
+                else:
+                    result["classification"] = "on_time"
         
         return result
     
@@ -278,7 +286,8 @@ async def check_in(
     longitude = request.longitude
     accuracy = request.accuracy
     device_id = request.device_id
-    shift_type = request.shift_type
+    requested_shift_type = request.shift_type
+    shift_type = None
     
     # Validate location data - location is required
     if not location and not (latitude and longitude):
@@ -302,6 +311,14 @@ async def check_in(
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
+    # Determine shift for current check-in server-side (do not trust client clock/timezone)
+    server_shift_type = ShiftTimes.determine_shift_type(current_time, db)
+    if requested_shift_type and requested_shift_type != server_shift_type:
+        print(
+            f"WARNING: Client-provided shift_type '{requested_shift_type}' does not match server shift_type '{server_shift_type}' at {current_time}. Overriding with server value."
+        )
+    shift_type = server_shift_type
+    
     existing_attendance = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
@@ -312,15 +329,23 @@ async def check_in(
     ).first()
     
     if existing_attendance:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Already checked in today. Please check out first."
-        )
+        # Check if existing check-in is for the same shift type
+        existing_shift = existing_attendance.shift_type or "Day Shift"
+        existing_base_shift = existing_shift.split(" → ")[0] if " → " in existing_shift else existing_shift
+        
+        # Extract base shift type from current shift (remove "→ Extended" if present)
+        current_base_shift = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
+        
+        if existing_base_shift == current_base_shift:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Already checked in for {existing_base_shift}. Please check out first."
+            )
+        # Allow double shift (different shift types)
+        else:
+            print(f"ALLOWING DOUBLE SHIFT: {existing_base_shift} + {current_base_shift}")
     
-    # Determine shift if not provided using centralized logic
-    if not shift_type:
-        shift_type = ShiftTimes.determine_shift_type(current_time, db)
-
+    
     # Classify check-in using centralized logic
     late_reason = request.late_reason
     check_in_classification = ShiftTimes.classify_check_in(current_time, shift_type, db)
@@ -591,25 +616,47 @@ async def check_out(
     print(f"  device_id: {device_id}")
     print(f"  user_id: {current_user.user_id}")
     
-    # Find today's active attendance record (checked in but not out)
+    # Find today's active attendance records (checked in but not out)
     current_time = get_current_time()
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
-    attendance = db.query(AttendanceLog).filter(
+    active_attendances = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
             AttendanceLog.check_in_time >= today_start,
             AttendanceLog.check_in_time <= today_end,
             AttendanceLog.check_out_time.is_(None)
         )
-    ).first()
+    ).all()
     
-    if not attendance:
+    if not active_attendances:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No active check-in record found for today"
         )
+    
+    # If multiple active shifts, determine which one to check out based on current time
+    attendance = None
+    if len(active_attendances) == 1:
+        attendance = active_attendances[0]
+    else:
+        # Multiple active shifts - determine based on current time
+        current_shift = ShiftTimes.determine_shift_type(current_time, db)
+        
+        # Find attendance matching current shift
+        for active_att in active_attendances:
+            active_shift = active_att.shift_type or "Day Shift"
+            active_base_shift = active_shift.split(" → ")[0] if " → " in active_shift else active_shift
+            current_base_shift = current_shift.split(" → ")[0] if " → " in current_shift else current_shift
+            
+            if active_base_shift == current_base_shift:
+                attendance = active_att
+                break
+        
+        # If no matching shift found, use the most recent one
+        if not attendance:
+            attendance = active_attendances[-1]  # Last check-in
 
     # Classify check-out using centralized logic
     early_checkout_reason = request.early_checkout_reason
@@ -768,13 +815,15 @@ async def check_out(
     attendance.updated_at = current_time
     
     # Determine final shift type using centralized logic
-    initial_shift = ShiftTimes.determine_shift_type(attendance.check_in_time, db)
-    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, attendance.check_in_time, current_time, db)
+    check_in_local = to_app_timezone(attendance.check_in_time)
+    check_out_local = to_app_timezone(current_time)
+    initial_shift = ShiftTimes.determine_shift_type(check_in_local, db)
+    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, check_in_local, check_out_local, db)
     
     # Calculate and store work hours
     # Ensure both datetimes are naive for subtraction
-    check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
-    check_out_naive = attendance.check_out_time.replace(tzinfo=None) if attendance.check_out_time.tzinfo else attendance.check_out_time
+    check_in_naive = check_in_local
+    check_out_naive = check_out_local
     work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
     attendance.work_hours = work_hours
     
@@ -847,46 +896,54 @@ async def get_today_attendance(
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
-    attendance = db.query(AttendanceLog).filter(
+    attendances = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
             AttendanceLog.check_in_time >= today_start,
             AttendanceLog.check_in_time <= today_end
         )
-    ).order_by(desc(AttendanceLog.check_in_time)).first()
+    ).order_by(desc(AttendanceLog.check_in_time)).all()
     
-    if not attendance:
+    if not attendances:
         return {"message": "No attendance record for today"}
     
-    # Calculate work hours if checked out
-    work_hours = None
-    if attendance.check_out_time:
-        # Convert timezone-aware datetimes to naive for consistent subtraction
-        check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
-        check_out_naive = attendance.check_out_time.replace(tzinfo=None) if attendance.check_out_time.tzinfo else attendance.check_out_time
-        work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
-    
-    # Convert PostGIS geography to string for API response
-    location_str = None
-    if attendance.location:
-        # Use ST_AsText to convert geography to WKT string
-        location_result = db.execute(
-            text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
-            {"id": attendance.attendance_log_id}
-        ).first()
-        if location_result:
-            location_str = location_result[0]
+    # Return all attendance records for the day
+    attendance_records = []
+    for attendance in attendances:
+        # Calculate work hours if checked out
+        work_hours = None
+        if attendance.check_out_time:
+            # Convert timezone-aware datetimes to naive for consistent subtraction
+            check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
+            check_out_naive = attendance.check_out_time.replace(tzinfo=None) if attendance.check_out_time.tzinfo else attendance.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
+        
+        # Convert PostGIS geography to string for API response
+        location_str = None
+        if attendance.location:
+            # Use ST_AsText to convert geography to WKT string
+            location_result = db.execute(
+                text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+                {"id": attendance.attendance_log_id}
+            ).first()
+            if location_result:
+                location_str = location_result[0]
+        
+        attendance_records.append({
+            "attendance_log_id": str(attendance.attendance_log_id),
+            "date": format_date(attendance.check_in_time),
+            "check_in_time": format_time(attendance.check_in_time),
+            "check_out_time": format_time(attendance.check_out_time),
+            "location": location_str,
+            "work_hours": round(work_hours, 2) if work_hours else None,
+            "device_id": attendance.device_id,
+            "accuracy": float(attendance.accuracy) if attendance.accuracy else None,
+            "shift_type": attendance.shift_type
+        })
     
     return {
-        "attendance_log_id": str(attendance.attendance_log_id),
-        "date": format_date(attendance.check_in_time),
-        "check_in_time": format_time(attendance.check_in_time),
-        "check_out_time": format_time(attendance.check_out_time),
-        "location": location_str,
-        "work_hours": round(work_hours, 2) if work_hours else None,
-        "device_id": attendance.device_id,
-        "accuracy": float(attendance.accuracy) if attendance.accuracy else None,
-        "shift_type": attendance.shift_type
+        "attendances": attendance_records,
+        "total_records": len(attendance_records)
     }
 
 @router.post("/test-notifications")
