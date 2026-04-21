@@ -348,15 +348,39 @@ async def check_in(
             AttendanceLog.check_out_time.is_(None)
         )
     ).first()
-    
+
+    # Also check for unresolved night shift check-ins from yesterday (regardless of current time)
+    # This handles the case where someone forgot to check out their night shift
+    if not active_attendance:
+        yesterday_start = today_start - timedelta(days=1)
+        yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        unresolved_night_shift = db.query(AttendanceLog).filter(
+            and_(
+                AttendanceLog.user_id == current_user.user_id,
+                AttendanceLog.check_in_time >= yesterday_start,
+                AttendanceLog.check_in_time <= yesterday_end,
+                AttendanceLog.check_out_time.is_(None),
+                AttendanceLog.shift_type.ilike('%Night Shift%')
+            )
+        ).first()
+
+        if unresolved_night_shift:
+            # User has an unresolved night shift from yesterday
+            # They need to check out first before checking in for a new shift
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You have an unresolved night shift from yesterday. Please check out from your previous shift first before starting a new one."
+            )
+
     if active_attendance:
         # Check if active check-in is for a different shift type
         active_shift = active_attendance.shift_type or "Day Shift"
         active_base_shift = active_shift.split(" → ")[0] if " → " in active_shift else active_shift
-        
+
         # Extract base shift type from current shift (remove "→ Extended" if present)
         current_base_shift = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
-        
+
         if active_base_shift != current_base_shift:
             print(f"ALLOWING DOUBLE SHIFT: {active_base_shift} + {current_base_shift}")
         else:
@@ -637,11 +661,13 @@ async def check_out(
     print(f"  device_id: {device_id}")
     print(f"  user_id: {current_user.user_id}")
     
-    # Find today's active attendance records (checked in but not out)
+    # Find active attendance records (checked in but not out)
+    # Always check both today's records and yesterday's unresolved night shifts
     current_time = get_current_time()
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
-    
+
+    # Start with today's active records
     active_attendances = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
@@ -650,7 +676,28 @@ async def check_out(
             AttendanceLog.check_out_time.is_(None)
         )
     ).all()
-    
+
+    # Also check for unresolved night shift check-ins from yesterday (regardless of current time)
+    # This handles the case where someone forgot to check out their night shift
+    yesterday_start = today_start - timedelta(days=1)
+    yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    yesterday_unresolved = db.query(AttendanceLog).filter(
+        and_(
+            AttendanceLog.user_id == current_user.user_id,
+            AttendanceLog.check_in_time >= yesterday_start,
+            AttendanceLog.check_in_time <= yesterday_end,
+            AttendanceLog.check_out_time.is_(None),
+            AttendanceLog.shift_type.ilike('%Night Shift%')  # Only night shift records
+        )
+    ).all()
+
+    # Add yesterday's unresolved night shifts to the list
+    active_attendances = list(active_attendances) + list(yesterday_unresolved)
+
+    if active_attendances:
+        print(f"DEBUG: Found {len(active_attendances)} active check-in(s) - {len(yesterday_unresolved)} from yesterday")
+
     if not active_attendances:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -912,11 +959,13 @@ async def get_today_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get today's attendance record for the current user"""
+    """Get today's attendance record for the current user.
+    Also includes unresolved night shift check-ins from yesterday that need to be checked out."""
     current_time = get_current_time()
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
-    
+
+    # Get today's attendance records
     attendances = db.query(AttendanceLog).filter(
         and_(
             AttendanceLog.user_id == current_user.user_id,
@@ -924,6 +973,24 @@ async def get_today_attendance(
             AttendanceLog.check_in_time <= today_end
         )
     ).order_by(desc(AttendanceLog.check_in_time)).all()
+
+    # Always check for unresolved night shift check-ins from yesterday
+    # This handles the case where someone forgot to check out their night shift
+    yesterday_start = today_start - timedelta(days=1)
+    yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    yesterday_unresolved_night_shifts = db.query(AttendanceLog).filter(
+        and_(
+            AttendanceLog.user_id == current_user.user_id,
+            AttendanceLog.check_in_time >= yesterday_start,
+            AttendanceLog.check_in_time <= yesterday_end,
+            AttendanceLog.check_out_time.is_(None),  # Active (not checked out)
+            AttendanceLog.shift_type.ilike('%Night Shift%')  # Only night shift
+        )
+    ).order_by(desc(AttendanceLog.check_in_time)).all()
+
+    # Add yesterday's unresolved night shifts to the list
+    attendances = list(attendances) + list(yesterday_unresolved_night_shifts)
     
     if not attendances:
         return {"message": "No attendance record for today"}
