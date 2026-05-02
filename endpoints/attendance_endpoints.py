@@ -600,20 +600,7 @@ async def check_in(
             print(f" CHECK-IN NOTIFICATION FAILED")
             print(f"   Result: {result}")
         
-        # Create in-app notification
-        notification = Notification(
-            user_id=current_user.user_id,
-            title=" Check-in Successful",
-            message=f"You successfully checked in at {current_time.strftime('%H:%M')} for {attendance.shift_type or 'Day Shift'}",
-            type="attendance",
-            is_read=False,
-            created_at=current_time,
-            updated_at=current_time
-        )
-        db.add(notification)
-        db.commit()
-        db.add(AuditLog(actor_id=current_user.user_id, action="check_in", entity="attendance", details={"attendance_log_id": str(attendance.attendance_log_id)}))
-        db.commit()
+
         
         print(f" CHECK-IN NOTIFICATION PROCESS COMPLETED")
     
@@ -918,18 +905,7 @@ async def check_out(
             force_send=True
         )
 
-        # Create in-app notification
-        notification = Notification(
-            user_id=current_user.user_id,
-            title="✅ Check-out Successful",
-            message=f"You successfully checked out at {format_time_short(attendance.check_out_time)}. Total hours worked: {round(work_hours, 1)}",
-            type="attendance",
-            is_read=False,
-            created_at=current_time,
-            updated_at=current_time
-        )
-        db.add(notification)
-        db.commit()
+
         
     except Exception as e:
         print(f"Failed to send check-out notification: {e}")
