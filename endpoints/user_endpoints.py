@@ -182,7 +182,7 @@ def verify_admin_role(token: str) -> bool:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
         # Updated with actual role names from database
-        return user_role in ["HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department", "Accountant"]
+        return user_role in ["HR", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department", "Accountant"]
     except:
         return False
 
@@ -728,6 +728,140 @@ async def get_users_by_department(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving users by department: {str(e)}"
+        )
+
+class UpdateUserRoleRequest(BaseModel):
+    role_id: str
+
+@router.put("/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    request: UpdateUserRoleRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a user's role. Only accessible by System Admins.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    # Verify system admin role specifically
+    try:
+        import jwt
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+        ALGORITHM = os.getenv("ALGORITHM", "HS256")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role")
+        
+        # Only allow System Admins to change roles
+        if not user_role or not user_role.lower() in ['system admin', 'system administrator']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only System Admins can change user roles"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid authentication token"
+        )
+    
+    try:
+        # Get the user to update
+        user = db.query(User).filter(
+            User.user_id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Get the new role
+        new_role = db.query(Role).filter(Role.role_id == request.role_id).first()
+        
+        if not new_role:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Role not found"
+            )
+        
+        # Update user role
+        old_role_name = user.role.name if user.role else "Unknown"
+        user.role_id = request.role_id
+        user.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(user)
+        
+        # Log the role change (you might want to add an audit log table)
+        print(f"User {user.first_name} {user.surname} role changed from {old_role_name} to {new_role.name} by System Admin")
+        
+        # Return updated user data
+        user_data = UserResponse(
+            user_id=str(user.user_id),
+            employee_number=user.employee_number,
+            national_id=user.national_id,
+            first_name=user.first_name,
+            surname=user.surname,
+            other_names=user.other_names,
+            suffix=user.suffix,
+            date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+            gender=user.gender,
+            home_of_origin=user.home_of_origin,
+            traditional_authority=user.traditional_authority,
+            district=user.district,
+            current_address=user.current_address,
+            contact_number=user.contact_number,
+            email=user.email,
+            marital_status=user.marital_status,
+            spouse_name=user.spouse_name,
+            spouse_contact=user.spouse_contact,
+            date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+            designation=user.designation.name if user.designation else None,
+            department_id=str(user.department_id) if user.department_id else None,
+            is_head_of_department=user.is_head_of_department,
+            phone=user.phone,
+            role_id=str(user.role_id),
+            status=user.status,
+            profile_photo_url=user.profile_photo_url,
+            blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+            blacklisted_reason=user.blacklisted_reason,
+            registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+            selfie_verified=user.selfie_verified,
+            last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+            created_at=user.created_at.isoformat() if user.created_at else None,
+            updated_at=user.updated_at.isoformat() if user.updated_at else None,
+            deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+            deleted_by=str(user.deleted_by) if user.deleted_by else None,
+            role_name=user.role.name if user.role else "Unknown",
+            department_name=user.department.name if user.department else None
+        )
+        
+        return {
+            "success": True,
+            "message": f"User role updated successfully from {old_role_name} to {new_role.name}",
+            "data": user_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating user role: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating user role: {str(e)}"
         )
 
 @router.get("/users/{user_id}", response_model=UserDetailsResponse)

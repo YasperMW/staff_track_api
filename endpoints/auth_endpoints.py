@@ -444,7 +444,7 @@ async def reset_password(request: ResetPasswordRequest, db: Session = Depends(ge
         
         # Generate and send OTP for password reset
         otp_code = create_otp_record(db, request.email, "password_reset")
-        await email_service.send_password_reset_otp_email(request.email, otp_code)
+        await email_service.send_otp_email(request.email, otp_code, "password_reset")
         
         return OTPResponse(
             success=True,

@@ -62,7 +62,7 @@ async def test_fcm_connection(
 ):
     """Test FCM connectivity and return diagnostic information"""
     # Only admins can test FCM connectivity
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -146,7 +146,7 @@ async def create_notification(
     """Create a new notification"""
     
     # Only admins can create notifications for other users
-    if notification.recipient_user_id and current_user.role.name not in ['HR Admin', 'System Admin']:
+    if notification.recipient_user_id and current_user.role.name not in ['HR', 'System Admin']:
         raise HTTPException(status_code=403, detail="Only admins can create notifications for other users")
     
     recipient_id = notification.recipient_user_id or current_user.user_id
@@ -310,7 +310,7 @@ async def send_broadcast_notification(
     Only admins can send broadcast notifications.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -494,7 +494,7 @@ async def get_departments_for_targeting(
     Only admins can access this endpoint.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -544,7 +544,7 @@ async def get_roles_for_targeting(
     Only admins can access this endpoint.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -594,7 +594,7 @@ async def get_user_statistics_for_targeting(
     Only admins can access this endpoint.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -674,7 +674,7 @@ async def send_advanced_broadcast_notification(
     Only admins can send broadcast notifications.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -870,7 +870,7 @@ async def get_broadcast_logs(
     Only admins can access broadcast logs.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,
@@ -933,7 +933,7 @@ async def get_broadcast_log_detail(
     Only admins can access broadcast logs.
     """
     # Check admin permissions
-    admin_roles = ['HR Admin', 'System Admin', 'Principal Hospital Administrator', 'HR', 'System Administrator']
+    admin_roles = ['HR', 'System Admin', 'Principal Hospital Administrator', 'System Administrator']
     if current_user.role.name not in admin_roles:
         raise HTTPException(
             status_code=403,

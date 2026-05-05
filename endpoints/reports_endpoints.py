@@ -84,7 +84,7 @@ async def get_monthly_attendance_report(
     Generate monthly attendance report with optional filtering by department or individual
     """
     # Validate user permissions (only HR and above can access reports)
-    allowed_roles = ["HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
+    allowed_roles = ["HR", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
     if current_user.role.name not in allowed_roles:
         raise HTTPException(status_code=403, detail="Insufficient permissions to access reports")
     
@@ -322,7 +322,7 @@ async def get_departments(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of departments for filtering"""
-    allowed_roles = ["HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
+    allowed_roles = ["HR", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
     if current_user.role.name not in allowed_roles:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     
@@ -342,7 +342,7 @@ async def get_employees(
     current_user: User = Depends(get_current_user)
 ):
     """Get list of employees for filtering"""
-    allowed_roles = ["HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
+    allowed_roles = ["HR", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department"]
     if current_user.role.name not in allowed_roles:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     

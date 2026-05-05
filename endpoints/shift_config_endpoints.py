@@ -85,7 +85,7 @@ async def get_shift_configurations(
     Only accessible to HR Admin and System Admin roles
     """
     # Check permissions
-    if current_user.role.role_name not in ['HR Admin', 'System Admin']:
+    if current_user.role.role_name not in ['HR', 'System Admin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only HR Admin and System Admin can view shift configurations"
@@ -129,7 +129,7 @@ async def get_shift_configuration(
     Get a specific shift configuration by type
     """
     # Check permissions
-    if current_user.role.role_name not in ['HR Admin', 'System Admin']:
+    if current_user.role.role_name not in ['HR', 'System Admin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only HR Admin and System Admin can view shift configurations"
@@ -177,7 +177,7 @@ async def create_shift_configuration(
     Only accessible to HR Admin and System Admin roles
     """
     # Check permissions
-    if current_user.role.role_name not in ['HR Admin', 'System Admin']:
+    if current_user.role.role_name not in ['HR', 'System Admin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only HR Admin and System Admin can create shift configurations"
@@ -245,7 +245,7 @@ async def update_shift_configuration(
     Only accessible to HR Admin and System Admin roles
     """
     # Check permissions
-    if current_user.role.role_name not in ['HR Admin', 'System Admin']:
+    if current_user.role.role_name not in ['HR', 'System Admin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only HR Admin and System Admin can update shift configurations"
@@ -304,7 +304,7 @@ async def delete_shift_configuration(
     Only accessible to HR Admin and System Admin roles
     """
     # Check permissions
-    if current_user.role.role_name not in ['HR Admin', 'System Admin']:
+    if current_user.role.role_name not in ['HR', 'System Admin']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only HR Admin and System Admin can delete shift configurations"

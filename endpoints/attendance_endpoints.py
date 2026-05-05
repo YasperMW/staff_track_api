@@ -1309,6 +1309,10 @@ async def get_team_today_list(
                 "status": status,
                 "check_in_time": check_in_time_str,
                 "check_out_time": check_out_time_str,
+                "late_reason": log.late_reason if log else None,
+                "early_checkout_reason": log.early_checkout_reason if log else None,
+                "shift_type": log.shift_type if log else None,
+                "work_hours": log.work_hours if log else None,
             }
         )
     
@@ -1785,3 +1789,258 @@ async def get_recent_check_ins(
         })
     
     return {"recent_check_ins": recent_check_ins}
+
+
+@router.get("/all-departments-today")
+async def get_all_departments_today(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get today's attendance summary for all departments.
+    HR/Admin only endpoint.
+    """
+    from models.db_models import Department
+
+    # Get all active departments
+    departments = db.query(Department).filter(Department.deleted_at.is_(None)).all()
+
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    result = []
+    for dept in departments:
+        staff = db.query(User).filter(
+            User.department_id == dept.department_id,
+            User.deleted_at.is_(None)
+        ).all()
+
+        total = len(staff)
+        if total == 0:
+            result.append({
+                "department_id": str(dept.department_id),
+                "name": dept.name,
+                "total_staff": 0,
+                "present": 0,
+                "absent": 0,
+                "late": 0,
+            })
+            continue
+
+        staff_ids = [u.user_id for u in staff]
+
+        logs = (
+            db.query(AttendanceLog)
+            .filter(
+                AttendanceLog.user_id.in_(staff_ids),
+                AttendanceLog.check_in_time >= today_start,
+                AttendanceLog.check_in_time <= today_end,
+            )
+            .all()
+        )
+
+        present_ids = set()
+        late_ids = set()
+
+        for log in logs:
+            if log.check_in_time:
+                present_ids.add(log.user_id)
+                # Late if check-in at or after 09:00
+                if log.check_in_time.hour >= 9:
+                    late_ids.add(log.user_id)
+
+        present = len(present_ids)
+        late = len(late_ids)
+        absent = total - present
+
+        result.append({
+            "department_id": str(dept.department_id),
+            "name": dept.name,
+            "total_staff": total,
+            "present": present,
+            "absent": absent,
+            "late": late,
+        })
+
+    return {"departments": result}
+
+
+@router.get("/department/{department_id}/today")
+async def get_department_today_attendance(
+    department_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get today's attendance list for a specific department.
+    HR/Admin only endpoint.
+    """
+    from models.db_models import Department
+
+    # Validate department exists
+    dept = db.query(Department).filter(
+        Department.department_id == department_id,
+        Department.deleted_at.is_(None)
+    ).first()
+
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    staff = db.query(User).filter(
+        User.department_id == department_id,
+        User.deleted_at.is_(None)
+    ).all()
+
+    if not staff:
+        return {"staff": []}
+
+    staff_ids = [u.user_id for u in staff]
+
+    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    logs = (
+        db.query(AttendanceLog)
+        .filter(
+            AttendanceLog.user_id.in_(staff_ids),
+            AttendanceLog.check_in_time >= today_start,
+            AttendanceLog.check_in_time <= today_end,
+        )
+        .all()
+    )
+
+    # Build user_id -> latest log map
+    user_logs = {}
+    for log in logs:
+        if log.user_id not in user_logs:
+            user_logs[log.user_id] = log
+        elif log.check_in_time > user_logs[log.user_id].check_in_time:
+            user_logs[log.user_id] = log
+
+    staff_list = []
+    for user in staff:
+        log = user_logs.get(user.user_id)
+
+        if log and log.check_in_time:
+            check_in_time_str = log.check_in_time.strftime("%H:%M")
+            check_out_time_str = log.check_out_time.strftime("%H:%M") if log.check_out_time else None
+
+            work_hours = None
+            if log.check_out_time:
+                check_in_naive = log.check_in_time.replace(tzinfo=None) if log.check_in_time.tzinfo else log.check_in_time
+                check_out_naive = log.check_out_time.replace(tzinfo=None) if log.check_out_time.tzinfo else log.check_out_time
+                work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
+
+            status = "Present"
+            if log.check_in_time.hour >= 9:
+                status = "Late"
+            if log.check_out_time:
+                status = "Completed"
+        else:
+            check_in_time_str = None
+            check_out_time_str = None
+            work_hours = None
+            status = "Absent"
+
+        role_name = ""
+        if getattr(user, "designation", None):
+            role_name = user.designation.name
+        elif getattr(user, "role", None):
+            role_name = user.role.name
+
+        staff_list.append({
+            "user_id": str(user.user_id),
+            "name": f"{user.first_name or ''} {user.surname or ''}".strip(),
+            "employee_number": user.employee_number or "",
+            "role": role_name,
+            "status": status,
+            "check_in_time": check_in_time_str,
+            "check_out_time": check_out_time_str,
+            "work_hours": round(work_hours, 2) if work_hours else None,
+            "shift_type": log.shift_type if log else "Day Shift",
+            "late_reason": log.late_reason if log else None,
+            "early_checkout_reason": log.early_checkout_reason if log else None,
+        })
+
+    return {"staff": staff_list}
+
+
+@router.get("/user/{user_id}/history")
+async def get_user_attendance_history(
+    user_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get attendance history for a specific user.
+    HR/Admin only endpoint.
+    """
+    from models.db_models import Department
+
+    # Verify target user exists
+    target_user = db.query(User).filter(User.user_id == user_id, User.deleted_at.is_(None)).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    query = db.query(AttendanceLog).filter(AttendanceLog.user_id == user_id)
+
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            query = query.filter(AttendanceLog.check_in_time >= start)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.filter(AttendanceLog.check_in_time <= end)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+    logs = (
+        query.order_by(desc(AttendanceLog.check_in_time))
+        .limit(limit)
+        .all()
+    )
+
+    result = []
+    for log in logs:
+        work_hours = None
+        if log.check_out_time:
+            check_in_naive = log.check_in_time.replace(tzinfo=None) if log.check_in_time.tzinfo else log.check_in_time
+            check_out_naive = log.check_out_time.replace(tzinfo=None) if log.check_out_time.tzinfo else log.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
+
+        # Convert PostGIS geography to string for API response
+        location_str = None
+        if log.location:
+            location_result = db.execute(
+                text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+                {"id": log.attendance_log_id}
+            ).first()
+            if location_result:
+                location_str = location_result[0]
+
+        result.append({
+            "attendance_log_id": str(log.attendance_log_id),
+            "date": format_date(log.check_in_time),
+            "check_in_time": format_time(log.check_in_time),
+            "check_out_time": format_time(log.check_out_time),
+            "location": location_str,
+            "work_hours": round(work_hours, 2) if work_hours else None,
+            "device_id": log.device_id,
+            "accuracy": float(log.accuracy) if log.accuracy else None,
+            "shift_type": log.shift_type,
+            "late_reason": log.late_reason,
+            "early_checkout_reason": log.early_checkout_reason,
+        })
+
+    return {
+        "user_name": f"{target_user.first_name or ''} {target_user.surname or ''}".strip(),
+        "history": result,
+    }

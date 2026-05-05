@@ -276,7 +276,7 @@ async def create_request(
     else:
         # Fallback to HR if no HOD found
         hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(
-            Role.name.in_(["HR Admin", "HR"]),
+            Role.name == "HR",
             User.deleted_at.is_(None)
         ).first()
         if hr:
@@ -690,7 +690,7 @@ async def approve_request(
 
             # Next: HR
             hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(
-                Role.name.in_(["HR Admin", "HR"]),
+                Role.name == "HR",
                 User.deleted_at.is_(None)
             ).first()
             next_approver_id = hr.user_id if hr else None
@@ -745,7 +745,7 @@ async def approve_request(
             req.approval_level = 2
             
             # Next: HR
-            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name.in_(["HR Admin", "HR"]), User.deleted_at.is_(None)).first()
+            hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(Role.name == "HR", User.deleted_at.is_(None)).first()
             next_approver_id = hr.user_id if hr else None
             req.current_approver_id = next_approver_id
             
