@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints, attendance_reports
 from database import engine, seed_default_admin, run_database_migrations
 from models.db_models import Base
 import os
@@ -100,6 +100,7 @@ app.include_router(file_endpoints.router, prefix="/files", tags=["files"])
 app.include_router(user_endpoints.router, prefix="/users", tags=["users"])
 app.include_router(lookup_endpoints.router, prefix="/lookup", tags=["lookup"])
 app.include_router(attendance_endpoints.router, tags=["attendance"])
+app.include_router(attendance_reports.router, prefix="/attendance", tags=["attendance_reports"])
 app.include_router(notifications_endpoints.router, prefix="/notifications", tags=["notifications"])
 app.include_router(requests_endpoints.router)
 app.include_router(announcements_endpoints.router, prefix="/api/announcements", tags=["announcements"])
