@@ -1481,6 +1481,8 @@ async def get_team_today_list_v2(
             "check_out_time": check_out_time_str,
             "status": status,
             "shift_type": shift_type,
+            "late_reason": log.late_reason if log else None,
+            "early_checkout_reason": log.early_checkout_reason if log else None,
         })
     
     return {"staff": staff_list}

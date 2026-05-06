@@ -59,7 +59,7 @@ def generate_attendance_pdf(
     user_department: Optional[str] = None,
     summary: Optional[Dict[str, Any]] = None
 ):
-    """Generate a PDF report for attendance records"""
+    """Generate a PDF report for individual staff attendance with summary and detailed records"""
     
     doc = SimpleDocTemplate(
         buffer,
@@ -72,16 +72,15 @@ def generate_attendance_pdf(
     
     elements = []
     
-    # Title
-    elements.append(Paragraph("Attendance Report", create_header_style()))
+    # Title - department name as title if available, otherwise generic
+    title = f"{user_department} Attendance Report" if user_department else "Attendance Report"
+    elements.append(Paragraph(title, create_header_style()))
     
     # Employee info
     info_data = [
         ['Employee:', user_name],
         ['Period:', f'{start_date} to {end_date}'],
     ]
-    if user_department:
-        info_data.append(['Department:', user_department])
     
     info_table = Table(info_data, colWidths=[2*inch, 4*inch])
     info_table.setStyle(TableStyle([
@@ -95,29 +94,32 @@ def generate_attendance_pdf(
     
     # Summary section
     if summary:
-        elements.append(Paragraph("Summary", create_subheader_style()))
+        elements.append(Paragraph("Attendance Summary", create_subheader_style()))
         
         total_days = summary.get('total_days', 0)
         present_days = summary.get('present_days', 0)
-        late_days = summary.get('late_days', 0)
+        absent_days = summary.get('absent_days', 0)
+        on_time = summary.get('on_time', 0)
+        late = summary.get('late', 0)
+        early_out = summary.get('early_out', 0)
         total_hours = summary.get('total_work_hours', 0)
-        overtime_hours = summary.get('total_overtime_hours', 0)
+        avg_hours = summary.get('avg_hours', 0)
         
         summary_data = [
-            ['Total Check-ins', 'Days Present', 'Late Days', 'Total Hours', 'Overtime Hours'],
-            [str(total_days), str(present_days), str(late_days), f'{total_hours:.1f}h', f'{overtime_hours:.1f}h'],
+            ['Days Present', 'Days Absent', 'On Time', 'Late', 'Early Out', 'Total Hours', 'Avg Hours'],
+            [str(present_days), str(absent_days), str(on_time), str(late), str(early_out), f'{total_hours:.1f}h', f'{avg_hours:.1f}h'],
         ]
         
-        summary_table = Table(summary_data, colWidths=[1.5*inch, 1.5*inch, 1.2*inch, 1.2*inch, 1.5*inch])
+        summary_table = Table(summary_data, colWidths=[1.2*inch, 1.2*inch, 1.0*inch, 1.0*inch, 1.0*inch, 1.2*inch, 1.2*inch])
         summary_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (4, 0), ReportColors.header_bg),
-            ('TEXTCOLOR', (0, 0), (4, 0), ReportColors.header_text),
-            ('FONTNAME', (0, 0), (4, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (4, -1), 10),
-            ('ALIGN', (0, 0), (4, -1), 'CENTER'),
-            ('BOTTOMPADDING', (0, 0), (4, -1), 8),
-            ('TOPPADDING', (0, 0), (4, -1), 8),
-            ('GRID', (0, 0), (4, -1), 1, ReportColors.border),
+            ('BACKGROUND', (0, 0), (6, 0), ReportColors.header_bg),
+            ('TEXTCOLOR', (0, 0), (6, 0), ReportColors.header_text),
+            ('FONTNAME', (0, 0), (6, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (6, -1), 10),
+            ('ALIGN', (0, 0), (6, -1), 'CENTER'),
+            ('BOTTOMPADDING', (0, 0), (6, -1), 8),
+            ('TOPPADDING', (0, 0), (6, -1), 8),
+            ('GRID', (0, 0), (6, -1), 1, ReportColors.border),
         ]))
         elements.append(summary_table)
         elements.append(Spacer(1, 20))
@@ -203,12 +205,11 @@ def generate_department_summary_pdf(
     
     elements = []
     
-    # Title
-    elements.append(Paragraph(f"Department Attendance Report", create_header_style()))
+    # Title - department name as the title
+    elements.append(Paragraph(f"{department_name} Attendance Report", create_header_style()))
     
-    # Department info
+    # Period info
     info_data = [
-        ['Department:', department_name],
         ['Period:', f'{start_date} to {end_date}'],
         ['Total Staff:', str(total_staff)],
     ]
@@ -226,20 +227,22 @@ def generate_department_summary_pdf(
     # Staff attendance summary table
     elements.append(Paragraph("Staff Attendance Summary", create_subheader_style()))
     
-    table_data = [['#', 'Staff Name', 'Days Present', 'Late Days', 'Total Hours', 'Overtime Hours', 'Attendance %']]
+    table_data = [['#', 'Employee Name', 'Days Present', 'Days Absent', 'On Time', 'Late', 'Early Out', 'Total Hours', 'Avg Hours']]
     
     for i, record in enumerate(staff_records, 1):
         table_data.append([
             str(i),
             record.get('staff_name', 'N/A'),
             str(record.get('days_present', 0)),
-            str(record.get('late_days', 0)),
+            str(record.get('days_absent', 0)),
+            str(record.get('on_time', 0)),
+            str(record.get('late', 0)),
+            str(record.get('early_out', 0)),
             f"{record.get('total_hours', 0):.1f}h",
-            f"{record.get('overtime_hours', 0):.1f}h",
-            f"{record.get('attendance_percentage', 0):.1f}%",
+            f"{record.get('avg_hours', 0):.1f}h",
         ])
     
-    col_widths = [0.4*inch, 2*inch, 1.2*inch, 1*inch, 1.2*inch, 1.2*inch, 1.4*inch]
+    col_widths = [0.4*inch, 1.5*inch, 0.9*inch, 0.9*inch, 0.8*inch, 0.8*inch, 0.9*inch, 1.0*inch, 0.9*inch]
     table = Table(table_data, colWidths=col_widths)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), ReportColors.header_bg),
@@ -247,7 +250,7 @@ def generate_department_summary_pdf(
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 9),
         ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('ALIGN', (2, 1), (6, -1), 'CENTER'),
+        ('ALIGN', (2, 1), (8, -1), 'CENTER'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
         ('GRID', (0, 0), (-1, -1), 0.5, ReportColors.border),
