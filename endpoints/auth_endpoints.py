@@ -207,7 +207,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(user)
         dept_name = user.department.name if user.department else ""
-        token = create_access_token(data={"sub": user.email, "role": user.role.name})
+        role_name = user.role.name if user.role else "Staff"
+        token = create_access_token(data={"sub": user.email, "role": role_name})
         return AuthResponse(
             success=True,
             message="Login successful",
@@ -217,7 +218,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                 "email": user.email,
                 "first_name": user.first_name,
                 "surname": user.surname,
-                "role": user.role.name,
+                "role": role_name,
                 "department": dept_name,
                 "phone": user.phone,
             }
