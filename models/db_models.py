@@ -64,6 +64,7 @@ class Designation(Base):
     name = Column(String(150), nullable=False)
     description = Column(Text)
     department_id = Column(UUID(as_uuid=True), ForeignKey("departments.department_id"))
+    is_head_of_department = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
     deleted_at = Column(DateTime(timezone=True))
