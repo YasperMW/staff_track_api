@@ -1,10 +1,10 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select, text
 from database import get_db
-from models.db_models import Role, Department, Designation
+from models.db_models import Role, Department, Designation, User
 from datetime import datetime
 import uuid
 
@@ -587,4 +587,41 @@ async def delete_designation(designation_id: str, db: Session = Depends(get_db))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting designation: {str(e)}"
+        )
+
+@router.get("/all-staff")
+async def get_all_staff(
+    department_id: Optional[str] = Query(None, description="Filter by department ID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all active staff members, optionally filtered by department.
+    """
+    try:
+        query = db.query(User).filter(User.deleted_at.is_(None))
+        
+        if department_id:
+            query = query.filter(User.department_id == department_id)
+        
+        users = query.all()
+        
+        staff_list = []
+        for user in users:
+            staff_list.append({
+                "user_id": str(user.user_id),
+                "employee_number": user.employee_number,
+                "first_name": user.first_name,
+                "surname": user.surname,
+                "email": user.email,
+                "phone": user.phone,
+                "department_id": str(user.department_id) if user.department_id else None,
+                "role_id": str(user.role_id) if user.role_id else None,
+            })
+        
+        return staff_list
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving staff: {str(e)}"
         )
