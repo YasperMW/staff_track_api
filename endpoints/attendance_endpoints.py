@@ -2067,3 +2067,169 @@ async def get_user_attendance_history(
         "user_name": f"{target_user.first_name or ''} {target_user.surname or ''}".strip(),
         "history": result,
     }
+
+
+@router.get("/all")
+async def get_all_staff_attendance(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get attendance records for all staff regardless of department.
+    Supports date range filtering and pagination.
+    Used for the attendance page on the web dashboard.
+    """
+    from models.db_models import Department
+
+    # Get all active staff (no department filter)
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
+    staff_query = staff_query.outerjoin(Department, User.department_id == Department.department_id)
+    staff = staff_query.all()
+
+    if not staff:
+        return {
+            "staff": [],
+            "total": 0,
+            "page": page,
+            "limit": limit
+        }
+
+    staff_ids = [u.user_id for u in staff]
+
+    # Determine date range
+    if start_date:
+        try:
+            start_dt = get_day_start(datetime.strptime(start_date, "%Y-%m-%d"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format. Use YYYY-MM-DD"
+            )
+    else:
+        # Default to today if no start date
+        current_time = get_current_time()
+        start_dt = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        try:
+            end_dt = get_day_end(datetime.strptime(end_date, "%Y-%m-%d"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format. Use YYYY-MM-DD"
+            )
+    else:
+        # Default to same as start date
+        end_dt = start_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    # Get attendance logs for the date range
+    logs_query = db.query(AttendanceLog).filter(
+        AttendanceLog.user_id.in_(staff_ids),
+        AttendanceLog.check_in_time >= start_dt,
+        AttendanceLog.check_in_time <= end_dt
+    ).order_by(desc(AttendanceLog.check_in_time))
+
+    # Get total count for pagination
+    total_count = logs_query.count()
+
+    # Apply pagination
+    offset = (page - 1) * limit
+    logs = logs_query.offset(offset).limit(limit).all()
+
+    # Build user lookup map for faster access
+    user_map = {u.user_id: u for u in staff}
+
+    # Build user -> logs mapping
+    user_logs = {}
+    for log in logs:
+        if log.user_id not in user_logs:
+            user_logs[log.user_id] = []
+        user_logs[log.user_id].append(log)
+
+    staff_results = []
+
+    for user in staff:
+        user_id = user.user_id
+        logs_list = user_logs.get(user_id, [])
+
+        if not logs_list:
+            # User has no attendance for this date range - show as absent
+            staff_results.append({
+                "user_id": str(user_id),
+                "name": f"{user.first_name or ''} {user.surname or ''}".strip(),
+                "employee_number": user.employee_number or "",
+                "department": getattr(getattr(user, '_Department', None), 'name', None) or (user.department.name if getattr(user, 'department', None) else None) or "Unknown",
+                "status": "Absent",
+                "check_in_time": None,
+                "check_out_time": None,
+                "work_hours": None,
+                "shift_type": None,
+                "late_reason": None,
+                "early_checkout_reason": None,
+                "date": start_dt.strftime("%Y-%m-%d") if start_date else None
+            })
+            continue
+
+        # Get the earliest check-in and latest check-out for the day
+        earliest_log = min(logs_list, key=lambda x: x.check_in_time)
+        latest_checkout = None
+        for log in logs_list:
+            if log.check_out_time:
+                if latest_checkout is None or log.check_out_time > latest_checkout:
+                    latest_checkout = log.check_out_time
+
+        # Determine status
+        status = "Active"
+        if latest_checkout:
+            status = "Completed"
+        elif earliest_log.check_in_time.hour >= 9:
+            status = "Late"
+
+        # Calculate work hours
+        work_hours = None
+        if earliest_log.check_out_time:
+            check_in_naive = earliest_log.check_in_time.replace(tzinfo=None) if earliest_log.check_in_time.tzinfo else earliest_log.check_in_time
+            check_out_naive = earliest_log.check_out_time.replace(tzinfo=None) if earliest_log.check_out_time.tzinfo else earliest_log.check_out_time
+            work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
+
+        # Convert PostGIS geography to string
+        location_str = None
+        if earliest_log.location:
+            location_result = db.execute(
+                text("SELECT ST_AsText(location) as location_str FROM attendance_logs WHERE attendance_log_id = :id"),
+                {"id": earliest_log.attendance_log_id}
+            ).first()
+            if location_result:
+                location_str = location_result[0]
+
+        staff_results.append({
+            "user_id": str(user_id),
+            "name": f"{user.first_name or ''} {user.surname or ''}".strip(),
+            "employee_number": user.employee_number or "",
+            "department": getattr(getattr(user, '_Department', None), 'name', None) or (user.department.name if getattr(user, 'department', None) else None) or "Unknown",
+            "status": status,
+            "check_in_time": format_time(earliest_log.check_in_time),
+            "check_out_time": format_time(latest_checkout) if latest_checkout else None,
+            "work_hours": round(work_hours, 2) if work_hours else None,
+            "shift_type": earliest_log.shift_type,
+            "late_reason": earliest_log.late_reason,
+            "early_checkout_reason": earliest_log.early_checkout_reason,
+            "date": format_date(earliest_log.check_in_time),
+            "location": location_str
+        })
+
+    return {
+        "staff": staff_results,
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "start_date": start_dt.strftime("%Y-%m-%d"),
+        "end_date": end_dt.strftime("%Y-%m-%d")
+    }
