@@ -942,7 +942,6 @@ async def update_user(
     user_id: str,
     request: UserUpdateRequest,
     token: Optional[str] = Depends(get_token_from_bearer),
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
