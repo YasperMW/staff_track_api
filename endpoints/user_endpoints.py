@@ -908,96 +908,98 @@ async def get_user_details(
     if not verify_admin_role(token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions to access user details"
+            detail="Only administrators can access user details"
+        )
+
+    user = db.query(User).filter(User.user_id == user_id, User.deleted_at.is_(None)).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
     
-    try:
-        # Query user with their role and department
-        user = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).filter(
-            User.user_id == user_id,
-            User.deleted_at.is_(None)
-        ).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Query user documents
-        documents = db.query(EmployeeFile).filter(
-            EmployeeFile.user_id == user_id,
-            EmployeeFile.deleted_at.is_(None)
-        ).all()
-        
-        # Prepare user response
-        user_data = UserResponse(
-            user_id=str(user.user_id),
-            employee_number=user.employee_number,
-            national_id=user.national_id,
-            first_name=user.first_name,
-            surname=user.surname,
-            other_names=user.other_names,
-            suffix=user.suffix,
-            date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
-            gender=user.gender,
-            home_of_origin=user.home_of_origin,
-            traditional_authority=user.traditional_authority,
-            district=user.district,
-            current_address=user.current_address,
-            contact_number=user.contact_number,
-            email=user.email,
-            marital_status=user.marital_status,
-            spouse_name=user.spouse_name,
-            spouse_contact=user.spouse_contact,
-            date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
-            designation=user.designation.name if user.designation else None,
-            department_id=str(user.department_id) if user.department_id else None,
-            is_head_of_department=user.is_head_of_department,
-            phone=user.phone,
-            role_id=str(user.role_id),
-            status=user.status,
-            profile_photo_url=user.profile_photo_url,
-            blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
-            blacklisted_reason=user.blacklisted_reason,
-            registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
-            selfie_verified=user.selfie_verified,
-            last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
-            failed_login_attempts=user.failed_login_attempts,
-            locked_until=user.locked_until.isoformat() if user.locked_until else None,
-            created_at=user.created_at.isoformat() if user.created_at else None,
-            updated_at=user.updated_at.isoformat() if user.updated_at else None,
-            deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
-            deleted_by=str(user.deleted_by) if user.deleted_by else None,
-            role_name=user.role.name if user.role else "Unknown",
-            department_name=user.department.name if user.department else None
-        )
-        
-        # Prepare documents response
-        document_responses = []
-        for doc in documents:
-            doc_data = DocumentResponse(
-                document_id=str(doc.employee_file_id),
-                user_id=str(doc.user_id),
-                document_type=doc.file_type,
-                file_path=doc.file_url,
-                file_name=doc.original_filename or 'Unknown',
-                upload_date=doc.upload_date.isoformat() if doc.upload_date else None
-            )
-            document_responses.append(doc_data)
-        
-        return UserDetailsResponse(
-            user=user_data,
-            documents=document_responses
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
+    user_data = build_user_details_response(user)
+    return user_data
+
+
+# Update user request model
+class UserUpdateRequest(BaseModel):
+    first_name: Optional[str] = None
+    surname: Optional[str] = None
+    other_names: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role_id: Optional[str] = None
+    department_id: Optional[str] = None
+    designation_id: Optional[str] = None
+    status: Optional[str] = None
+    is_head_of_department: Optional[bool] = None
+
+
+@router.put("/users/{user_id}", response_model=ApiResponse)
+async def update_user(
+    user_id: str,
+    request: UserUpdateRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user details.
+    """
+    if not token:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving user details: {str(e)}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
         )
+    
+    if not verify_admin_role(token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can update user details"
+        )
+
+    user = db.query(User).filter(User.user_id == user_id, User.deleted_at.is_(None)).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Update only provided fields
+    if request.first_name is not None:
+        user.first_name = request.first_name
+    if request.surname is not None:
+        user.surname = request.surname
+    if request.other_names is not None:
+        user.other_names = request.other_names
+    if request.email is not None:
+        user.email = request.email
+    if request.phone is not None:
+        user.phone = request.phone
+    if request.role_id is not None:
+        user.role_id = request.role_id
+    if request.department_id is not None:
+        user.department_id = request.department_id
+    if request.designation_id is not None:
+        user.designation_id = request.designation_id
+    if request.status is not None:
+        user.status = request.status
+    if request.is_head_of_department is not None:
+        user.is_head_of_department = request.is_head_of_department
+    
+    user.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "success": True,
+        "message": "User updated successfully"
+    }
+
 
 @router.put("/users/{user_id}/lock", response_model=ApiResponse)
 async def lock_user_account(
