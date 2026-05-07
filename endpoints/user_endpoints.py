@@ -5,7 +5,11 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from database import get_db
 from models.db_models import User, Role, Department, EmployeeFile
-from datetime import datetime
+from datetime import datetime, timedelta
+import jwt
+import os
+import bcrypt
+from dotenv import load_dotenv
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -43,6 +47,8 @@ class UserResponse(BaseModel):
     registration_timestamp: Optional[str]
     selfie_verified: bool
     last_login_at: Optional[str]
+    failed_login_attempts: Optional[int]
+    locked_until: Optional[str]
     created_at: str
     updated_at: str
     deleted_at: Optional[str]
@@ -137,6 +143,18 @@ class DocumentResponse(BaseModel):
 class UserDetailsResponse(BaseModel):
     user: UserResponse
     documents: List[DocumentResponse]
+
+class LockAccountRequest(BaseModel):
+    lock_duration_minutes: Optional[int] = None
+    password_confirmation: str
+
+class DeleteAccountRequest(BaseModel):
+    password_confirmation: str
+
+class ApiResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[dict] = None
 
 class UpdateProfilePhotoRequest(BaseModel):
     profile_photo_url: str
@@ -540,6 +558,8 @@ async def get_all_users(
                 registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
                 selfie_verified=user.selfie_verified,
                 last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                failed_login_attempts=user.failed_login_attempts,
+                locked_until=user.locked_until.isoformat() if user.locked_until else None,
                 created_at=user.created_at.isoformat() if user.created_at else None,
                 updated_at=user.updated_at.isoformat() if user.updated_at else None,
                 deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
@@ -624,6 +644,8 @@ async def get_active_users(
                 registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
                 selfie_verified=user.selfie_verified,
                 last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                failed_login_attempts=user.failed_login_attempts,
+                locked_until=user.locked_until.isoformat() if user.locked_until else None,
                 created_at=user.created_at.isoformat() if user.created_at else None,
                 updated_at=user.updated_at.isoformat() if user.updated_at else None,
                 deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
@@ -708,6 +730,8 @@ async def get_users_by_department(
                 registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
                 selfie_verified=user.selfie_verified,
                 last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                failed_login_attempts=user.failed_login_attempts,
+                locked_until=user.locked_until.isoformat() if user.locked_until else None,
                 created_at=user.created_at.isoformat() if user.created_at else None,
                 updated_at=user.updated_at.isoformat() if user.updated_at else None,
                 deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
@@ -840,6 +864,8 @@ async def update_user_role(
             registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
             selfie_verified=user.selfie_verified,
             last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+            failed_login_attempts=user.failed_login_attempts,
+            locked_until=user.locked_until.isoformat() if user.locked_until else None,
             created_at=user.created_at.isoformat() if user.created_at else None,
             updated_at=user.updated_at.isoformat() if user.updated_at else None,
             deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
@@ -937,6 +963,8 @@ async def get_user_details(
             registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
             selfie_verified=user.selfie_verified,
             last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+            failed_login_attempts=user.failed_login_attempts,
+            locked_until=user.locked_until.isoformat() if user.locked_until else None,
             created_at=user.created_at.isoformat() if user.created_at else None,
             updated_at=user.updated_at.isoformat() if user.updated_at else None,
             deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
@@ -970,3 +998,97 @@ async def get_user_details(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving user details: {str(e)}"
         )
+
+@router.put("/users/{user_id}/lock", response_model=ApiResponse)
+async def lock_user_account(
+    user_id: str,
+    request: LockAccountRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    load_dotenv()
+    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+    ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authorization header")
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        admin_role: str = payload.get("role")
+        if not admin_role or not admin_role.lower() in ['system admin', 'system administrator']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only System Admins can lock accounts")
+        admin_email: str = payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid authentication token")
+
+    admin_user = db.query(User).filter(User.email == admin_email, User.deleted_at.is_(None)).first()
+    if not admin_user or not admin_user.password_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin account not found")
+
+    if not bcrypt.checkpw(request.password_confirmation.encode('utf-8'), admin_user.password_hash.encode('utf-8')):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Password confirmation failed")
+
+    target_user = db.query(User).filter(User.user_id == user_id, User.deleted_at.is_(None)).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if request.lock_duration_minutes is not None and request.lock_duration_minutes > 0:
+        target_user.locked_until = datetime.utcnow() + timedelta(minutes=request.lock_duration_minutes)
+        target_user.failed_login_attempts = 0
+        message = f"Account locked for {request.lock_duration_minutes} minutes"
+    else:
+        target_user.locked_until = None
+        target_user.failed_login_attempts = 0
+        message = "Account lock removed"
+
+    target_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(target_user)
+
+    return {"success": True, "message": message, "data": None}
+
+@router.delete("/users/{user_id}/hard-delete", response_model=ApiResponse)
+async def hard_delete_user_account(
+    user_id: str,
+    request: DeleteAccountRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    load_dotenv()
+    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+    ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authorization header")
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        admin_role: str = payload.get("role")
+        if not admin_role or not admin_role.lower() in ['system admin', 'system administrator']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only System Admins can delete accounts")
+        admin_email: str = payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid authentication token")
+
+    admin_user = db.query(User).filter(User.email == admin_email, User.deleted_at.is_(None)).first()
+    if not admin_user or not admin_user.password_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin account not found")
+
+    if not bcrypt.checkpw(request.password_confirmation.encode('utf-8'), admin_user.password_hash.encode('utf-8')):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Password confirmation failed")
+
+    target_user = db.query(User).filter(User.user_id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if target_user.user_id == admin_user.user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account")
+
+    user_info = f"{target_user.first_name} {target_user.surname} ({target_user.email})"
+
+    db.query(EmployeeFile).filter(EmployeeFile.user_id == user_id).delete()
+    db.delete(target_user)
+    db.commit()
+
+    return {"success": True, "message": f"Account '{user_info}' permanently deleted", "data": None}
