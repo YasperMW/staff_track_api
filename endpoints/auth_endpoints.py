@@ -86,6 +86,31 @@ async def get_grades(db: Session = Depends(get_db)):
         }
         for g in grades
     ]
+    if 'system admin' not in user_role and 'system administrator' not in user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only System Admins can delete grades"
+        )
+    
+    grade = db.query(Grade).filter(Grade.grade_id == grade_id, Grade.deleted_at.is_(None)).first()
+    if not grade:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Grade not found"
+        )
+    
+    # Check if any users are assigned to this grade
+    if grade.users:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete grade that is assigned to users. Reassign users first."
+        )
+    
+    grade.deleted_at = get_current_time()
+    grade.deleted_by = current_user.user_id
+    db.commit()
+    
+    return {"success": True}
 
 # Helper functions
 import bcrypt

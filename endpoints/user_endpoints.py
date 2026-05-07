@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from database import get_db
-from models.db_models import User, Role, Department, EmployeeFile
+from models.db_models import User, Role, Department, EmployeeFile, Grade
 from datetime import datetime, timedelta
 import jwt
 import os
@@ -1092,3 +1092,95 @@ async def hard_delete_user_account(
     db.commit()
 
     return {"success": True, "message": f"Account '{user_info}' permanently deleted", "data": None}
+
+
+class UpdateUserGradeRequest(BaseModel):
+    grade_id: str
+
+
+@router.put("/users/{user_id}/grade")
+async def update_user_grade(
+    user_id: str,
+    request: UpdateUserGradeRequest,
+    token: Optional[str] = Depends(get_token_from_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a user's grade. Only accessible by System Admins.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    try:
+        import jwt
+        import os
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+        ALGORITHM = os.getenv("ALGORITHM", "HS256")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_role: str = payload.get("role")
+        
+        if not user_role or not user_role.lower() in ['system admin', 'system administrator']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only System Admins can change user grades"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid authentication token"
+        )
+    
+    try:
+        user = db.query(User).filter(
+            User.user_id == user_id,
+            User.deleted_at.is_(None)
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Verify the grade exists
+        grade = db.query(Grade).filter(
+            Grade.grade_id == request.grade_id,
+            Grade.deleted_at.is_(None)
+        ).first()
+        
+        if not grade:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Grade not found"
+            )
+        
+        old_grade_name = user.grade.name if user.grade else "None"
+        
+        user.grade_id = grade.grade_id
+        user.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(user)
+        
+        return {
+            "success": True,
+            "message": f"Grade updated from '{old_grade_name}' to '{grade.name}'",
+            "user_id": str(user.user_id),
+            "grade_id": str(grade.grade_id),
+            "grade_name": grade.name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update user grade: {str(e)}"
+        )

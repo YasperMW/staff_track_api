@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints, attendance_reports, role_endpoints
+from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints, attendance_reports, role_endpoints, grade_endpoints
 from database import engine, seed_default_admin, run_database_migrations, seed_roles
 from models.db_models import Base
 import os
@@ -115,6 +115,8 @@ app.include_router(reports_endpoints.router, tags=["reports"])
 app.include_router(shift_config_endpoints.router, tags=["shift-configurations"])
 app.include_router(dashboard_endpoints.router)
 app.include_router(role_endpoints.router)
+
+app.include_router(grade_endpoints.router)
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
