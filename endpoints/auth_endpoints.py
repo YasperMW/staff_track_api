@@ -183,12 +183,15 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == request.email).first()
     if user:
         # Check if account is locked
-        if user.locked_until and user.locked_until > get_current_time():
-            remaining_time = (user.locked_until - get_current_time()).seconds // 60
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
-            )
+        if user.locked_until:
+            locked_until_naive = user.locked_until.replace(tzinfo=None) if user.locked_until.tzinfo else user.locked_until
+            now = get_current_time()
+            if locked_until_naive > now:
+                remaining_time = int((locked_until_naive - now).total_seconds() / 60)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
+                )
 
     if user and verify_password(request.password, user.password_hash):
         # Check if email is verified
@@ -839,12 +842,15 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
 
     if user:
         # Check if account is locked
-        if user.locked_until and user.locked_until > get_current_time():
-            remaining_time = (user.locked_until - get_current_time()).seconds // 60
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
-            )
+        if user.locked_until:
+            locked_until_naive = user.locked_until.replace(tzinfo=None) if user.locked_until.tzinfo else user.locked_until
+            now = get_current_time()
+            if locked_until_naive > now:
+                remaining_time = int((locked_until_naive - now).total_seconds() / 60)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Account temporarily locked. Try again in {remaining_time} minutes."
+                )
 
         # Check if user is active
         if user.status != "active":
