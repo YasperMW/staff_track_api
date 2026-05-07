@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel
 from typing import List, Optional
 from database import get_db
@@ -24,14 +25,14 @@ async def list_policies(
     current_user: User = Depends(get_current_user)
 ):
     # Simple derivation from balances of sample users (placeholder implementation)
-    rows = db.execute("""
+    rows = db.execute(text("""
         SELECT r.name as role_name, d.name as department_name, lb.leave_type, MAX(lb.allocated_days) as allocated_days, MAX(lb.bonus_days) as bonus_days
         FROM leave_balances lb
         JOIN users u ON u.user_id = lb.user_id
         LEFT JOIN roles r ON r.role_id = u.role_id
         LEFT JOIN departments d ON d.department_id = u.department_id
         GROUP BY r.name, d.name, lb.leave_type
-    """).fetchall()
+    """)).fetchall()
     return [
         LeavePolicyItem(
             role_name=row[0],
