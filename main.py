@@ -40,6 +40,18 @@ async def lifespan(app: FastAPI):
     print(f"🌍 Staff Track API initialized with timezone: {APP_TIMEZONE.zone}")
     print(f"📅 Current time in {APP_TIMEZONE.zone}: {get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
+    # Fix attendance records with wrong shift types (if enabled)
+    ATTENDANCE_FIX_ENABLED = os.getenv("ATTENDANCE_FIX_ENABLED", "false").lower() == "true"
+    if ATTENDANCE_FIX_ENABLED:
+        try:
+            from endpoints.attendance_endpoints import ShiftTimes
+            with SessionLocal() as db:
+                fixed_count = ShiftTimes.fix_attendance_records(db)
+                if fixed_count > 0:
+                    print(f"🔧 Fixed {fixed_count} attendance records with wrong shift types")
+        except Exception as e:
+            print(f"Error fixing attendance records: {e}")
+
     HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
     HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
 

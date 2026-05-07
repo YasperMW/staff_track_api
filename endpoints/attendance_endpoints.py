@@ -176,6 +176,73 @@ class ShiftTimes:
         return result
     
     @classmethod
+    def fix_attendance_records(cls, db: Session) -> int:
+        """Fix all attendance records with incorrect shift types.
+        
+        This fixes records that were wrongly marked due to the checkout logic bug
+        where shift type was recalculated at check-out instead of using the original.
+        
+        Returns the number of records fixed.
+        """
+        from models.db_models import AttendanceLog, ShiftConfiguration
+        
+        # Load shift configurations
+        cls._load_configurations(db)
+        
+        # Get all attendance records with check-out times
+        records = db.query(AttendanceLog).filter(
+            AttendanceLog.check_out_time.isnot(None)
+        ).order_by(AttendanceLog.check_in_time).all()
+        
+        fixed_count = 0
+        
+        for record in records:
+            if not record.shift_type or not record.check_in_time:
+                continue
+            
+            # Extract base shift type (without Extended suffix)
+            base_shift = record.shift_type.split(" → ")[0] if " → " in record.shift_type else record.shift_type
+            
+            # Determine correct shift type from check-in time
+            hour = record.check_in_time.hour
+            minute = record.check_in_time.minute
+            
+            if (hour > 6) or (hour == 6 and minute >= 0):
+                if (hour < 16) or (hour == 16 and minute < 30):
+                    correct_base_shift = "Day Shift"
+                else:
+                    correct_base_shift = "Night Shift"
+            else:
+                correct_base_shift = "Night Shift"
+            
+            # Check if should be extended
+            config = cls._configurations.get(correct_base_shift)
+            is_extended = False
+            
+            if config and record.check_out_time:
+                check_out_hour = record.check_out_time.hour
+                check_out_minute = record.check_out_time.minute
+                check_out_t = time(check_out_hour, check_out_minute)
+                if check_out_t > config.get('check_out_latest', time(17, 30)):
+                    is_extended = True
+            
+            # Build expected shift type
+            if is_extended:
+                expected_shift = f"{correct_base_shift} → Extended"
+            else:
+                expected_shift = correct_base_shift
+            
+            # Fix if different
+            if record.shift_type != expected_shift:
+                record.shift_type = expected_shift
+                fixed_count += 1
+        
+        if fixed_count > 0:
+            db.commit()
+        
+        return fixed_count
+    
+    @classmethod
     def get_final_shift_type(cls, initial_shift: str, check_in_time: datetime, check_out_time: datetime, db: Session) -> str:
         """Determine final shift type including extended status"""
         checkout_classification = cls.classify_check_out(check_out_time, initial_shift, check_in_time, db)
@@ -870,10 +937,9 @@ async def check_out(
     attendance.updated_at = current_time
     
     # Determine final shift type using centralized logic
-    check_in_local = to_app_timezone(attendance.check_in_time)
-    check_out_local = to_app_timezone(current_time)
-    initial_shift = ShiftTimes.determine_shift_type(check_in_local, db)
-    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, check_in_local, check_out_local, db)
+    # Retrieve the shift type that was assigned at check-in (not recalculated)
+    initial_shift = attendance.shift_type.split(" → ")[0] if " → " in (attendance.shift_type or "") else (attendance.shift_type or "Day Shift")
+    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, to_app_timezone(attendance.check_in_time), to_app_timezone(current_time), db)
     
     # Calculate and store work hours
     # Ensure both datetimes are naive for subtraction
