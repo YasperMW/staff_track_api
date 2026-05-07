@@ -615,8 +615,11 @@ async def get_active_users(
             try:
                 # Safely access relationships
                 designation_name = None
-                if user.designation:
-                    designation_name = user.designation.name
+                try:
+                    if user.designation:
+                        designation_name = user.designation.name
+                except Exception:
+                    pass  # Skip designation if table doesn't have the column
                 
                 role_name = "Unknown"
                 if user.role:
@@ -681,6 +684,7 @@ async def get_active_users(
         
     except Exception as e:
         print(f"Error in get_active_users: {e}")
+        db.rollback()  # Rollback failed transaction
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving active users: {str(e)}"

@@ -35,7 +35,6 @@ class DesignationResponse(BaseModel):
     description: Optional[str]
     department_id: str
     department_name: Optional[str]
-    is_head_of_department: bool = False
     created_at: str
 
     class Config:
@@ -54,13 +53,11 @@ class DesignationCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
     description: Optional[str] = Field(None, max_length=500)
     department_id: str
-    is_head_of_department: bool = False
 
 class DesignationUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=150)
     description: Optional[str] = Field(None, max_length=500)
     department_id: Optional[str] = None
-    is_head_of_department: Optional[bool] = None
 
 class RolesListResponse(BaseModel):
     success: bool
@@ -350,7 +347,6 @@ async def get_all_designations(db: Session = Depends(get_db)):
                 description=designation.description,
                 department_id=str(designation.department_id) if designation.department_id else None,
                 department_name=department_name,
-                is_head_of_department=designation.is_head_of_department or False,
                 created_at=designation.created_at.isoformat() if designation.created_at else None
             )
             designation_responses.append(designation_data)
@@ -407,15 +403,14 @@ async def create_designation(designation_data: DesignationCreate, db: Session = 
         
         db.execute(
             text("""
-                INSERT INTO designations (designation_id, name, description, department_id, is_head_of_department, created_at, updated_at)
-                VALUES (:designation_id, :name, :description, :department_id, :is_head_of_department, :created_at, :updated_at)
+                INSERT INTO designations (designation_id, name, description, department_id, created_at, updated_at)
+                VALUES (:designation_id, :name, :description, :department_id, :created_at, :updated_at)
             """),
             {
                 "designation_id": designation_id,
                 "name": designation_data.name,
                 "description": designation_data.description,
                 "department_id": designation_data.department_id,
-                "is_head_of_department": designation_data.is_head_of_department,
                 "created_at": now,
                 "updated_at": now
             }
@@ -505,10 +500,6 @@ async def update_designation(designation_id: str, designation_data: DesignationU
         if designation_data.department_id is not None:
             update_fields.append("department_id = :department_id")
             update_values["department_id"] = designation_data.department_id
-        
-        if designation_data.is_head_of_department is not None:
-            update_fields.append("is_head_of_department = :is_head_of_department")
-            update_values["is_head_of_department"] = designation_data.is_head_of_department
         
         if update_fields:
             query = f"""
