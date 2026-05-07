@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints, attendance_reports, role_endpoints
-from database import engine, seed_default_admin, run_database_migrations
+from database import engine, seed_default_admin, run_database_migrations, seed_roles
 from models.db_models import Base
 import os
 from dotenv import load_dotenv
