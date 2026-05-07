@@ -612,48 +612,65 @@ async def get_active_users(
         
         user_responses = []
         for user in users:
-            user_data = UserResponse(
-                user_id=str(user.user_id),
-                employee_number=user.employee_number,
-                national_id=user.national_id,
-                first_name=user.first_name,
-                surname=user.surname,
-                other_names=user.other_names,
-                suffix=user.suffix,
-                date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
-                gender=user.gender,
-                home_of_origin=user.home_of_origin,
-                traditional_authority=user.traditional_authority,
-                district=user.district,
-                current_address=user.current_address,
-                contact_number=user.contact_number,
-                email=user.email,
-                marital_status=user.marital_status,
-                spouse_name=user.spouse_name,
-                spouse_contact=user.spouse_contact,
-                date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
-                designation=user.designation.name if user.designation else None,
-                department_id=str(user.department_id) if user.department_id else None,
-                is_head_of_department=user.is_head_of_department,
-                phone=user.phone,
-                role_id=str(user.role_id),
-                status=user.status,
-                profile_photo_url=user.profile_photo_url,
-                blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
-                blacklisted_reason=user.blacklisted_reason,
-                registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
-                selfie_verified=user.selfie_verified,
-                last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
-                failed_login_attempts=user.failed_login_attempts,
-                locked_until=user.locked_until.isoformat() if user.locked_until else None,
-                created_at=user.created_at.isoformat() if user.created_at else None,
-                updated_at=user.updated_at.isoformat() if user.updated_at else None,
-                deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
-                deleted_by=str(user.deleted_by) if user.deleted_by else None,
-                role_name=user.role.name if user.role else "Unknown",
-                department_name=user.department.name if user.department else None
-            )
-            user_responses.append(user_data)
+            try:
+                # Safely access relationships
+                designation_name = None
+                if user.designation:
+                    designation_name = user.designation.name
+                
+                role_name = "Unknown"
+                if user.role:
+                    role_name = user.role.name
+                
+                department_name = None
+                if user.department:
+                    department_name = user.department.name
+                
+                user_data = UserResponse(
+                    user_id=str(user.user_id),
+                    employee_number=user.employee_number,
+                    national_id=user.national_id,
+                    first_name=user.first_name,
+                    surname=user.surname,
+                    other_names=user.other_names,
+                    suffix=user.suffix,
+                    date_of_birth=user.date_of_birth.isoformat() if user.date_of_birth else None,
+                    gender=user.gender,
+                    home_of_origin=user.home_of_origin,
+                    traditional_authority=user.traditional_authority,
+                    district=user.district,
+                    current_address=user.current_address,
+                    contact_number=user.contact_number,
+                    email=user.email,
+                    marital_status=user.marital_status,
+                    spouse_name=user.spouse_name,
+                    spouse_contact=user.spouse_contact,
+                    date_of_employment=user.date_of_employment.isoformat() if user.date_of_employment else None,
+                    designation=designation_name,
+                    department_id=str(user.department_id) if user.department_id else None,
+                    is_head_of_department=user.is_head_of_department,
+                    phone=user.phone,
+                    role_id=str(user.role_id),
+                    status=user.status,
+                    profile_photo_url=user.profile_photo_url,
+                    blacklisted_at=user.blacklisted_at.isoformat() if user.blacklisted_at else None,
+                    blacklisted_reason=user.blacklisted_reason,
+                    registration_timestamp=user.registration_timestamp.isoformat() if user.registration_timestamp else None,
+                    selfie_verified=user.selfie_verified,
+                    last_login_at=user.last_login_at.isoformat() if user.last_login_at else None,
+                    failed_login_attempts=user.failed_login_attempts,
+                    locked_until=user.locked_until.isoformat() if user.locked_until else None,
+                    created_at=user.created_at.isoformat() if user.created_at else None,
+                    updated_at=user.updated_at.isoformat() if user.updated_at else None,
+                    deleted_at=user.deleted_at.isoformat() if user.deleted_at else None,
+                    deleted_by=str(user.deleted_by) if user.deleted_by else None,
+                    role_name=role_name,
+                    department_name=department_name
+                )
+                user_responses.append(user_data)
+            except Exception as user_err:
+                print(f"Error processing user {user.user_id}: {user_err}")
+                continue
         
         return UsersListResponse(
             success=True,
@@ -663,6 +680,7 @@ async def get_active_users(
         )
         
     except Exception as e:
+        print(f"Error in get_active_users: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving active users: {str(e)}"
