@@ -636,6 +636,17 @@ async def get_admin_pending_requests_list(
 
         full_name = f"{row[5] or ''} {row[6] or ''}".strip()
 
+        # Check if current user already approved/denied this request at this level
+        request_id = row[0]
+        current_level = row[8]
+        existing_approval = db.query(RequestApproval).filter(
+            RequestApproval.request_id == request_id,
+            RequestApproval.approver_id == current_user.user_id,
+            RequestApproval.level == current_level
+        ).first()
+        
+        user_has_acted = existing_approval is not None
+
         requests.append(
             {
                 "id": str(row[0]),
@@ -648,6 +659,7 @@ async def get_admin_pending_requests_list(
                 "approval_level": row[8],
                 "leave_grant_required": row[9],
                 "contact_address": row[10],
+                "user_has_acted": user_has_acted,
             }
         )
 

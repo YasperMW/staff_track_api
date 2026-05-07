@@ -241,6 +241,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         db.refresh(user)
         dept_name = user.department.name if user.department else ""
         role_name = user.role.name if user.role else "Staff"
+        is_hod = user.is_head_of_department if hasattr(user, 'is_head_of_department') else False
         token = create_access_token(data={"sub": user.email, "role": role_name})
         return AuthResponse(
             success=True,
@@ -254,6 +255,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                 "role": role_name,
                 "department": dept_name,
                 "phone": user.phone,
+                "is_head_of_department": is_hod,
             }
         )
 
