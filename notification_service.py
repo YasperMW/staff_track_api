@@ -360,7 +360,9 @@ class NotificationService:
                 request_type=email_data.get('request_type', ''),
                 start_date=email_data.get('start_date', ''),
                 end_date=email_data.get('end_date'),
-                approver_name=email_data.get('approver_name'),
+                denied_by=email_data.get('denied_by'),
+                denied_by_role=email_data.get('denied_by_role'),
+                denied_at_level=email_data.get('denied_at_level', 1),
                 comment=email_data.get('comment')
             )
         elif notification_type == 'geofence_violation':

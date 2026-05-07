@@ -338,7 +338,10 @@ class EmailService:
         start_date: str, 
         end_date: str = None,
         approver_name: str = None,
-        comment: str = None
+        comment: str = None,
+        is_final_approval: bool = True,
+        approval_level: int = 1,
+        next_approver_name: str = None
     ) -> None:
         """Send email to requester when their request is approved"""
         from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
@@ -349,7 +352,21 @@ class EmailService:
         else:
             date_range = start_date
         
-        title = "Your Request Has Been Approved"
+        # Determine title and status based on approval progress
+        if is_final_approval:
+            title = "Your Request Has Been Fully Approved"
+            status_html = '<td style="padding: 8px 0; color: #059669; font-weight: 600;">✅ Fully Approved</td>'
+        else:
+            title = "Update on Your Request"
+            status_html = f'<td style="padding: 8px 0; color: #d97706; font-weight: 600;">⏳ Pending {next_approver_name or "Next Approver"} Approval</td>'
+        
+        # Additional message for partial approval
+        if is_final_approval:
+            message = f"Good news! Your {request_type} request for {date_range} has been <strong>fully approved</strong>!"
+            footer_note = "All approval levels have completed. Your request is now confirmed."
+        else:
+            message = f"Your {request_type} request for {date_range} has been <strong>approved</strong> by {approver_name} and is now pending {next_approver_name or 'the next approver'}'s approval."
+            footer_note = f"Approval Progress: Level {approval_level} of 4 complete. You'll receive another notification when the next approval is given."
         
         body_html = f'''
 <h1 style="font-size: 28px; color: #059669; margin: 0 0 24px; font-weight: 600;">
@@ -359,7 +376,7 @@ class EmailService:
     Hi {requester_name},
 </p>
 <p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
-    Good news! Your {request_type} request for {date_range} has been <strong>approved</strong>.
+    {message}
 </p>
 <div style="background-color: #ecfdf5; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #059669;">
     <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
@@ -374,11 +391,29 @@ class EmailService:
         </tr>
         <tr>
             <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
-            <td style="padding: 8px 0; color: #059669; font-weight: 600;">✅ Approved</td>
+            {status_html}
         </tr>
     </table>
 </div>
 '''
+        # Add approval progress note
+        if not is_final_approval:
+            body_html += f'''
+<div style="background-color: #fef3c7; padding: 16px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #d97706;">
+    <p style="font-size: 14px; color: #92400e; margin: 0; line-height: 1.5;">
+        <strong>⏳ Approval in Progress:</strong> Your request has been approved at level {approval_level}. {footer_note}
+    </p>
+</div>
+'''
+        else:
+            body_html += f'''
+<div style="background-color: #ecfdf5; padding: 16px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #059669;">
+    <p style="font-size: 14px; color: #065f46; margin: 0; line-height: 1.5;">
+        <strong>✅ Complete:</strong> {footer_note}
+    </p>
+</div>
+'''
+
         # Add approver comment if provided
         if comment:
             body_html += f'''
@@ -428,7 +463,9 @@ class EmailService:
         request_type: str, 
         start_date: str, 
         end_date: str = None,
-        approver_name: str = None,
+        denied_by: str = None,
+        denied_by_role: str = None,
+        denied_at_level: int = 1,
         comment: str = None
     ) -> None:
         """Send email to requester when their request is denied"""
@@ -442,6 +479,10 @@ class EmailService:
         
         title = "Your Request Has Been Denied"
         
+        # Denied by info
+        denied_by_info = f"{denied_by}" if denied_by else "An approver"
+        denied_role_info = f" ({denied_by_role})" if denied_by_role else ""
+        
         body_html = f'''
 <h1 style="font-size: 28px; color: #dc2626; margin: 0 0 24px; font-weight: 600;">
     ❌ {title}
@@ -450,7 +491,7 @@ class EmailService:
     Hi {requester_name},
 </p>
 <p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
-    Your {request_type} request for {date_range} has been <strong>denied</strong>.
+    Your {request_type} request for {date_range} has been <strong>denied</strong> by {denied_by_info}{denied_role_info}.
 </p>
 <div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
     <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Request Details</h3>
@@ -464,14 +505,27 @@ class EmailService:
             <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{date_range}</td>
         </tr>
         <tr>
-            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Status:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Status:</td>
             <td style="padding: 8px 0; color: #dc2626; font-weight: 600;">❌ Denied</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px 0; font-weight: 600; color: #374151;">Denied By:</td>
+            <td style="padding: 8px 0; color: #6b7280;">{denied_by_info}{denied_role_info}</td>
         </tr>
     </table>
 </div>
 '''
+        # Add approval level info
+        body_html += f'''
+<div style="background-color: #fef2f2; padding: 16px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #dc2626;">
+    <p style="font-size: 14px; color: #991b1b; margin: 0; line-height: 1.5;">
+        <strong>⛔ Denied at Approval Level {denied_at_level}:</strong> Your request reached {denied_at_level} of 4 approval levels before being denied. If you need to reapply, please contact the approver for feedback.
+    </p>
+</div>
+'''
+        
         # Add approver comment if provided
-        if comment:
+        if comment and comment.strip():
             body_html += f'''
 <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 24px 0;">
     <h4 style="font-size: 14px; color: #92400e; margin: 0 0 8px; font-weight: 600;">Reason for Denial:</h4>

@@ -37,6 +37,7 @@ class RequestCreate(BaseModel):
 
 class ApprovalPayload(BaseModel):
     comment: Optional[str] = None
+    approval_level: Optional[int] = None  # The level at which user is approving
     # HOD fields (Section B - Leave)
     hod_recommended_from: Optional[date] = None
     hod_recommended_to: Optional[date] = None
@@ -573,13 +574,11 @@ async def get_admin_pending_requests_list(
             WHERE {' AND '.join(where_clauses)}
         """
     else:
-        where_clauses.append("(r.current_approver_id IS NULL OR r.current_approver_id = :approver_id)")
-        params["approver_id"] = current_user.user_id
+        # Show all pending requests to all approvers (they can approve at their level)
+        where_clauses.append("r.status = 'pending'")
         if status_filter and status_filter.lower() in ["pending", "approved", "denied"]:
             where_clauses.append("r.status = :status")
             params["status"] = status_filter.lower()
-        else:
-            where_clauses.append("r.status = 'pending'")
         if type_filter:
             where_clauses.append("LOWER(r.type) LIKE :type")
             params["type"] = f"%{type_filter.lower()}%"
@@ -677,8 +676,8 @@ async def approve_request(
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     
-    if req.current_approver_id and str(req.current_approver_id) != str(current_user.user_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
+    # Allow any approver with the correct role to approve (not just current_approver_id)
+    # The approval level check will determine if they're authorized
 
     now = datetime.utcnow()
     next_approver_id = None
@@ -692,15 +691,19 @@ async def approve_request(
         timestamp=now
     )
     
-    # Trip/Duty Station Request Approval Chain (HOD -> HR -> Admin -> Accountant)
+    # Use approval_level from payload (set by frontend based on user role)
+    # Fall back to request's current level if not provided
+    user_approval_level = payload.approval_level or req.approval_level
+    
+    # Trip/Duty Station Request Approval Chain (Accountant -> HOD -> Admin -> Accountant)
     if req.type.lower() == "leave duty station":
-        # Stage 1: HOD (Section B)
-        if req.approval_level == 1:
+        # Stage 1: Accountant (Funds) - Level 1
+        if user_approval_level == 1:
             approval.hod_trip_recommendation = payload.hod_trip_recommendation
             approval.level = 1
             req.approval_level = 2
 
-            # Next: HR
+            # Next: HOD
             hr = db.query(User).join(Role, User.role_id == Role.role_id).filter(
                 Role.name == "HR",
                 User.deleted_at.is_(None)
@@ -708,8 +711,8 @@ async def approve_request(
             next_approver_id = hr.user_id if hr else None
             req.current_approver_id = next_approver_id
 
-        # Stage 2: HR (Section C)
-        elif req.approval_level == 2:
+        # Stage 2: HOD (Recommendation) - Level 2
+        elif user_approval_level == 2:
             # HR reviews and confirms leave entitlement
             approval.hr_annual_entitlement = payload.hr_annual_entitlement
             approval.hr_balance_if_approved = payload.hr_balance_if_approved
@@ -724,8 +727,8 @@ async def approve_request(
             next_approver_id = admin.user_id if admin else None
             req.current_approver_id = next_approver_id
 
-        # Stage 3: Admin (Section D)
-        elif req.approval_level == 3:
+        # Stage 3: Admin (Section D) - Level 3
+        elif user_approval_level == 3:
             approval.admin_trip_approval_details = payload.admin_trip_approval_details
             approval.level = 3
             req.approval_level = 4
@@ -738,18 +741,18 @@ async def approve_request(
             next_approver_id = accountant.user_id if accountant else None
             req.current_approver_id = next_approver_id
 
-        # Stage 4: Accountant (Final approval)
-        elif req.approval_level == 4:
+        # Stage 4: Accountant (Final approval) - Level 4
+        elif user_approval_level == 4:
             approval.accountant_funds_available = payload.accountant_funds_available
             approval.accountant_signed_date = now.date()
             approval.level = 4
             req.status = 'approved'
             req.current_approver_id = None
             
-    # Standard Leave Request Chain (HOD -> HR -> Admin)
+    # Standard Leave Request Chain (HOD -> HR -> Admin -> Accountant)
     else:
-        # Stage 1: HOD (Section B)
-        if req.approval_level == 1:
+        # Stage 1: HOD (Section B) - Level 1
+        if user_approval_level == 1:
             approval.hod_recommended_from = payload.hod_recommended_from
             approval.hod_recommended_to = payload.hod_recommended_to
             approval.hod_not_recommended_reason = payload.hod_not_recommended_reason
@@ -761,9 +764,8 @@ async def approve_request(
             next_approver_id = hr.user_id if hr else None
             req.current_approver_id = next_approver_id
             
-        # Stage 2: HR (Section C)
-        elif req.approval_level == 2:
-            approval.hr_annual_entitlement = payload.hr_annual_entitlement
+# Stage 2: HR (Section C) - Level 2
+        elif user_approval_level == 2:
             approval.hr_entitlement_taken_from = payload.hr_entitlement_taken_from
             approval.hr_entitlement_taken_to = payload.hr_entitlement_taken_to
             approval.hr_last_leave_from = payload.hr_last_leave_from
@@ -779,8 +781,8 @@ async def approve_request(
             next_approver_id = admin.user_id if admin else None
             req.current_approver_id = next_approver_id
             
-        # Stage 3: Admin (Section D)
-        elif req.approval_level == 3:
+        # Stage 3: Admin (Section D) - Level 3
+        elif user_approval_level == 3:
             approval.admin_granted_from = payload.admin_granted_from
             approval.admin_granted_to = payload.admin_granted_to
             approval.admin_total_days_approved = payload.admin_total_days_approved
@@ -795,8 +797,8 @@ async def approve_request(
             next_approver_id = accountant.user_id if accountant else None
             req.current_approver_id = next_approver_id
 
-        # Stage 4: Accountant (Final approval)
-        elif req.approval_level == 4:
+        # Stage 4: Accountant (Final approval) - Level 4
+        elif user_approval_level == 4:
             approval.level = 4
             req.status = 'approved'
             req.current_approver_id = None
@@ -818,10 +820,82 @@ async def approve_request(
     db.add(approval)
     db.commit()
 
-    # Notify next approver or requester using enhanced NotificationService
+    # Notify requester of approval progress
     requester = db.query(User).filter(User.user_id == req.user_id).first()
+    
+    # Determine the current level and next approver
+    current_level = req.approval_level  # This is the NEW level after approval
+    is_final_approval = next_approver_id is None
+    
+    # Map approval levels to role names
+    level_names = {
+        2: "HR",
+        3: "Hospital Administrator",
+        4: "Accountant"
+    }
+    next_approver_name = level_names.get(current_level, "Next Approver")
+    
+    # Send notification to requester about approval progress
+    if requester:
+        if is_final_approval:
+            # Final approval - request is fully approved
+            try:
+                await notification_service.send_notification(
+                    db=db,
+                    user_id=requester.user_id,
+                    title="Request Fully Approved",
+                    message=f"Your {req.type} request has been fully approved!",
+                    notification_type="request_approved",
+                    data={
+                        "request_id": str(req.request_id),
+                        "request_type": req.type
+                    },
+                    email_data={
+                        "requester_name": f"{requester.first_name} {requester.surname}",
+                        "request_type": req.type,
+                        "start_date": req.start_date.strftime('%B %d, %Y'),
+                        "end_date": req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
+                        "approver_name": f"{current_user.first_name} {current_user.surname}",
+                        "comment": payload.comment,
+                        "is_final_approval": True,
+                        "approval_level": current_level
+                    },
+                    force_send=True
+                )
+            except Exception as e:
+                print(f"Failed to send final approval notification: {e}")
+        else:
+            # Partial approval - still pending other approvals
+            try:
+                await notification_service.send_notification(
+                    db=db,
+                    user_id=requester.user_id,
+                    title="Request Update",
+                    message=f"Your {req.type} request has been approved by {current_user.first_name} {current_user.surname} and is pending {next_approver_name}'s approval",
+                    notification_type="request_escalated",
+                    data={
+                        "request_id": str(req.request_id),
+                        "request_type": req.type,
+                        "approval_level": current_level
+                    },
+                    email_data={
+                        "requester_name": f"{requester.first_name} {requester.surname}",
+                        "request_type": req.type,
+                        "start_date": req.start_date.strftime('%B %d, %Y'),
+                        "end_date": req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
+                        "approver_name": f"{current_user.first_name} {current_user.surname}",
+                        "comment": payload.comment,
+                        "is_final_approval": False,
+                        "approval_level": current_level,
+                        "next_approver_name": next_approver_name
+                    },
+                    force_send=True
+                )
+            except Exception as e:
+                print(f"Failed to send partial approval notification: {e}")
+
+    # Notify next approver if there is one
     if next_approver_id:
-        # Send notification to next approver
         try:
             await notification_service.send_notification(
                 db=db,
@@ -837,32 +911,6 @@ async def approve_request(
             )
         except Exception as e:
             print(f"Failed to send escalation notification: {e}")
-    else:
-        # Final approval notification to requester
-        if requester:
-            try:
-                await notification_service.send_notification(
-                    db=db,
-                    user_id=requester.user_id,
-                    title="Request Approved",
-                    message=f"Your {req.type} request has been approved",
-                    notification_type="request_approved",
-                    data={
-                        "request_id": str(req.request_id),
-                        "request_type": req.type
-                    },
-                    email_data={
-                        "requester_name": f"{requester.first_name} {requester.surname}",
-                        "request_type": req.type,
-                        "start_date": req.start_date.strftime('%B %d, %Y'),
-                        "end_date": req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
-                        "approver_name": f"{current_user.first_name} {current_user.surname}",
-                        "comment": payload.comment
-                    },
-                    force_send=True
-                )
-            except Exception as e:
-                print(f"Failed to send approval notification: {e}")
 
     return {"success": True}
 
@@ -1037,9 +1085,7 @@ async def deny_request(
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     
-    if req.current_approver_id and str(req.current_approver_id) != str(current_user.user_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
-
+    # Allow any approver with the correct role to deny
     now = datetime.utcnow()
     req.status = 'denied'
     req.updated_at = now
@@ -1060,24 +1106,38 @@ async def deny_request(
 
     # Send enhanced notification to requester using NotificationService
     requester = db.query(User).filter(User.user_id == req.user_id).first()
+    
+    # Determine the role that denied the request
+    denied_at_level = req.approval_level
+    deny_roles = {
+        1: "Head of Department",
+        2: "HR",
+        3: "Hospital Administrator",
+        4: "Accountant"
+    }
+    deny_role_name = deny_roles.get(denied_at_level, "Approver")
+    
     if requester:
         try:
             await notification_service.send_notification(
                 db=db,
                 user_id=requester.user_id,
                 title="Request Denied",
-                message=f"Your {req.type} request has been denied",
+                message=f"Your {req.type} request has been denied by {deny_role_name}",
                 notification_type="request_denied",
                 data={
                     "request_id": str(req.request_id),
-                    "request_type": req.type
+                    "request_type": req.type,
+                    "denied_at_level": denied_at_level
                 },
                 email_data={
                     "requester_name": f"{requester.first_name} {requester.surname}",
                     "request_type": req.type,
                     "start_date": req.start_date.strftime('%B %d, %Y'),
                     "end_date": req.end_date.strftime('%B %d, %Y') if req.end_date != req.start_date else None,
-                    "approver_name": f"{current_user.first_name} {current_user.surname}",
+                    "denied_by": f"{current_user.first_name} {current_user.surname}",
+                    "denied_by_role": deny_role_name,
+                    "denied_at_level": denied_at_level,
                     "comment": payload.comment
                 },
                 force_send=True
