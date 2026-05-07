@@ -1322,14 +1322,22 @@ async def get_team_today_list(
 @router.get("/team/today/summary")
 async def get_team_today_summary_v2(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    date: str = None
 ):
-    """Team today summary endpoint with forward slashes - returns data in frontend format"""
-    staff_query = db.query(User).filter(User.deleted_at.is_(None))
-    
-    if current_user.department_id:
+    """Team today summary endpoint - returns data in frontend format.
+    Optional date parameter in YYYY-MM-DD format. Uses current date if not provided."""
+    admin_roles = ['admin', 'administrator', 'hr', 'system admin', 'principal hospital administrator', 'system administrator']
+    is_admin = current_user.role and current_user.role.name.lower() in admin_roles
+
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
+
+    if not is_admin and current_user.department_id:
         staff_query = staff_query.filter(User.department_id == current_user.department_id)
-    
+
     staff = staff_query.all()
     
     if not staff:
@@ -1343,8 +1351,18 @@ async def get_team_today_summary_v2(
     
     staff_ids = [u.user_id for u in staff]
     
-    today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+            target_date = to_app_timezone(target_date)
+            today_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        except ValueError:
+            today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        today_start = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
     
     logs = (
         db.query(AttendanceLog)
@@ -1718,7 +1736,10 @@ async def get_recent_check_ins(
     from models.db_models import Department
     
     # Get all active staff (no department filter)
-    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
     # Join with department to get department name
     staff_query = staff_query.outerjoin(Department, User.department_id == Department.department_id)
     staff = staff_query.all()

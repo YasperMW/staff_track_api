@@ -107,6 +107,44 @@ def get_db():
         db.close()
 
 
+def seed_roles():
+    """Seed all required roles if they don't exist."""
+    from models.db_models import Role
+    from datetime import datetime
+
+    db = SessionLocal()
+    try:
+        required_roles = [
+            "System Admin",
+            "HR Admin",
+            "Head of Department",
+            "HR",
+            "Accountant",
+            "Principal Hospital Administrator",
+            "System Administrator",
+            "Staff"
+        ]
+
+        for role_name in required_roles:
+            existing_role = db.query(Role).filter(Role.name == role_name).first()
+            if not existing_role:
+                new_role = Role(
+                    name=role_name,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(new_role)
+                print(f"Created role: {role_name}")
+
+        db.commit()
+        print("Role seeding completed successfully.")
+    except Exception as e:
+        print(f"Error seeding roles: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def seed_default_admin():
     """Create default System Admin user if no users exist."""
     from models.db_models import User, Role, Department, Designation, Grade
@@ -135,7 +173,7 @@ def seed_default_admin():
             db.commit()
             db.refresh(default_grade)
 
-        # Create System Admin role
+        # Get System Admin role (should already exist from seed_roles)
         admin_role = db.query(Role).filter(Role.name == "System Admin").first()
         if not admin_role:
             admin_role = Role(

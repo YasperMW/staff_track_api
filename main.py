@@ -19,6 +19,9 @@ Base.metadata.create_all(bind=engine)
 # Run database migrations (add new columns if they don't exist)
 run_database_migrations()
 
+# Seed roles before creating users
+seed_roles()
+
 # Seed default admin user if database is empty
 seed_default_admin()
 

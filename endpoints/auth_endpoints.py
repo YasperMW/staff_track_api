@@ -31,26 +31,31 @@ def determine_role(department_name: str, designation_name: str) -> tuple[str, bo
     dept = department_name.lower() if department_name else ""
     desig = designation_name.lower() if designation_name else ""
 
-    # 1. Principal Hospital Administrator - Administration dept with leadership designation
-    if "administration" in dept and any(k in desig for k in ["administrator", "director", "secretary", "principal"]):
-        return "Principal Hospital Administrator", False
-
-    # 2. System Admin - IT dept with admin designation
+    # 1. System Administrator - IT dept with admin/system designation
     if "information technology" in dept or dept == "it":
+        if any(k in desig for k in ["system administrator", "system admin", "network administrator", "database administrator"]):
+            return "System Administrator", False
         if any(k in desig for k in ["admin", "system", "network", "it manager", "it support"]):
             return "System Admin", False
 
-    # 3. HR - Human Resources dept or HR designation
-    if "human resource" in dept or any(k in desig for k in ["hr ", "human resource", "hr officer", "hr manager"]):
-        return "HR", False
+    # 2. HR Admin - HR dept with admin/manager designation
+    if "human resource" in dept:
+        if any(k in desig for k in ["hr admin", "hr director", "hr manager", "head of hr"]):
+            return "HR Admin", False
+        if any(k in desig for k in ["hr ", "human resource", "hr officer", "hr manager"]):
+            return "HR", False
+
+    # 3. Principal Hospital Administrator - Administration dept with leadership designation
+    if "administration" in dept and any(k in desig for k in ["administrator", "director", "secretary", "principal", "ceo", "coo"]):
+        return "Principal Hospital Administrator", False
 
     # 4. Accountant - Finance dept or accountant designation
-    if "finance" in dept or any(k in desig for k in ["accountant", "accounts", "finance officer"]):
+    if "finance" in dept or any(k in desig for k in ["accountant", "accounts", "finance officer", "financial"]):
         return "Accountant", False
 
     # 5. Head of Department - leadership designation in other departments
     hod_keywords = ["head", "director", "chief", "manager", "lead", "supervisor", "principal"]
-    exclude_keywords = ["administrator", "accountant", "hr ", "human resource"]
+    exclude_keywords = ["administrator", "accountant", "hr ", "human resource", "system"]
 
     if any(k in desig for k in hod_keywords) and not any(k in desig for k in exclude_keywords):
         return "Head of Department", True

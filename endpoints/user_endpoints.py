@@ -200,7 +200,7 @@ def verify_admin_role(token: str) -> bool:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
         # Updated with actual role names from database
-        return user_role in ["HR", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department", "Accountant"]
+        return user_role in ["HR", "HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department", "Accountant"]
     except:
         return False
 
