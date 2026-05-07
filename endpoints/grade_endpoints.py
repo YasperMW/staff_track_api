@@ -5,6 +5,7 @@ from typing import Optional
 from database import get_db
 from models.db_models import User, Grade
 from timezone_config import get_current_time
+from endpoints.auth_endpoints import get_current_user
 
 router = APIRouter(prefix="/api/grades", tags=["grades"])
 
@@ -18,42 +19,13 @@ class UpdateGradeRequest(BaseModel):
     annual_leave_days: Optional[int] = None
 
 
-def get_current_user_from_token(token: str, db: Session):
-    """Validate token and return current user"""
-    import jwt
-    import os
-    from dotenv import load_dotenv
-    
-    load_dotenv()
-    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-    ALGORITHM = os.getenv("ALGORITHM", "HS256")
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        if not user_id:
-            return None
-        from models.db_models import User
-        user = db.query(User).filter(User.user_id == user_id, User.deleted_at.is_(None)).first()
-        return user
-    except Exception:
-        return None
-
-
 @router.post("")
 async def create_grade(
     request: CreateGradeRequest,
     db: Session = Depends(get_db),
-    token: Optional[str] = None
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new grade. Only accessible by System Admins."""
-    current_user = get_current_user_from_token(token, db) if token else None
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    
     user_role = current_user.role.name.lower() if current_user.role else ""
     if 'system admin' not in user_role and 'system administrator' not in user_role:
         raise HTTPException(
@@ -90,15 +62,8 @@ async def update_grade(
     grade_id: str,
     request: UpdateGradeRequest,
     db: Session = Depends(get_db),
-    token: Optional[str] = None
+    current_user: User = Depends(get_current_user)
 ):
-    """Update a grade. Only accessible by System Admins."""
-    current_user = get_current_user_from_token(token, db) if token else None
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
     
     user_role = current_user.role.name.lower() if current_user.role else ""
     if 'system admin' not in user_role and 'system administrator' not in user_role:
@@ -141,15 +106,8 @@ async def update_grade(
 async def delete_grade(
     grade_id: str,
     db: Session = Depends(get_db),
-    token: Optional[str] = None
+    current_user: User = Depends(get_current_user)
 ):
-    """Soft delete a grade. Only accessible by System Admins."""
-    current_user = get_current_user_from_token(token, db) if token else None
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
     
     user_role = current_user.role.name.lower() if current_user.role else ""
     if 'system admin' not in user_role and 'system administrator' not in user_role:
