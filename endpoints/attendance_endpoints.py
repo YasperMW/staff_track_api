@@ -1180,9 +1180,17 @@ async def get_team_today_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    admin_roles = ['system admin', 'system administrator', 'principal hospital administrator', 'hr']
+    user_role = current_user.role.name.lower() if current_user.role else ""
+    is_admin = any(ar in user_role for ar in admin_roles)
+
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
     
-    if current_user.department_id:
+    # Only filter by department for non-admin users
+    if not is_admin and current_user.department_id:
         staff_query = staff_query.filter(User.department_id == current_user.department_id)
     
     staff = staff_query.all()
@@ -1241,9 +1249,17 @@ async def get_team_today_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    admin_roles = ['system admin', 'system administrator', 'principal hospital administrator', 'hr']
+    user_role = current_user.role.name.lower() if current_user.role else ""
+    is_admin = any(ar in user_role for ar in admin_roles)
+
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
     
-    if current_user.department_id:
+    # Only filter by department for non-admin users
+    if not is_admin and current_user.department_id:
         staff_query = staff_query.filter(User.department_id == current_user.department_id)
     
     staff = staff_query.all()
@@ -1418,9 +1434,16 @@ async def get_team_today_list_v2(
     """Team today list endpoint with forward slashes - returns data in frontend format"""
     from models.db_models import Department
     
-    staff_query = db.query(User).filter(User.deleted_at.is_(None))
+    admin_roles = ['admin', 'administrator', 'hr', 'system admin', 'principal hospital administrator', 'system administrator']
+    is_admin = current_user.role and current_user.role.name.lower() in admin_roles
     
-    if current_user.department_id:
+    staff_query = db.query(User).filter(
+        User.deleted_at.is_(None),
+        User.status == 'active'
+    )
+    
+    # Only filter by department for non-admin users
+    if not is_admin and current_user.department_id:
         staff_query = staff_query.filter(User.department_id == current_user.department_id)
     
     # Join with department to get department name

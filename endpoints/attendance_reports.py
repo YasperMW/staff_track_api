@@ -467,6 +467,16 @@ async def generate_department_attendance_pdf_report(
         ).all()
         
         if not logs:
+            staff_records.append({
+                "staff_name": f"{s.first_name or ''} {s.surname or ''}".strip(),
+                "days_present": 0,
+                "days_absent": total_days,
+                "on_time": 0,
+                "late": 0,
+                "early_out": 0,
+                "total_hours": 0,
+                "avg_hours": 0,
+            })
             continue
         
         days_present_set = set()
