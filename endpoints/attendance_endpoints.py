@@ -943,8 +943,8 @@ async def check_out(
     
     # Calculate and store work hours
     # Ensure both datetimes are naive for subtraction
-    check_in_naive = check_in_local
-    check_out_naive = check_out_local
+    check_in_naive = attendance.check_in_time.replace(tzinfo=None) if attendance.check_in_time.tzinfo else attendance.check_in_time
+    check_out_naive = attendance.check_out_time.replace(tzinfo=None) if attendance.check_out_time.tzinfo else attendance.check_out_time
     work_hours = (check_out_naive - check_in_naive).total_seconds() / 3600.0
     attendance.work_hours = work_hours
     
