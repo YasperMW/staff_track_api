@@ -669,13 +669,17 @@ class EmailService:
         supervisor_name: str,
         location: str,
         distance_outside: float,
-        check_in_time: str
+        check_in_time: str,
+        action_type: str = "check_in"
     ) -> None:
         """Send email notification for geofence violation to employee and supervisor"""
         from_email = f"{self.mail_from_name} <{self.from_email}>" if self.mail_from_name else self.from_email
         
+        action_text = "check-in" if action_type == "check_in" else "check-out"
+        action_label = "Check-in" if action_type == "check_in" else "Check-out"
+        
         # Email to employee
-        employee_subject = "⚠️ Geofence Violation Alert - Check-in Outside Allowed Area"
+        employee_subject = f"⚠️ Geofence Violation Alert - {action_label.title()} Outside Allowed Area"
         employee_body_html = f'''
 <h1 style="font-size: 28px; color: #dc2626; margin: 0 0 24px; font-weight: 600;">
     ⚠️ Geofence Violation Detected
@@ -684,13 +688,13 @@ class EmailService:
     Hi {employee_name},
 </p>
 <p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
-    Your recent check-in at <strong>{check_in_time}</strong> was detected <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
+    Your recent {action_text} at <strong>{check_in_time}</strong> was detected <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
 </p>
 <div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
     <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Violation Details</h3>
     <table style="width: 100%; border-collapse: collapse;">
         <tr>
-            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">Check-in Time:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151; width: 40%;">{action_label} Time:</td>
             <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{check_in_time}</td>
         </tr>
         <tr>
@@ -705,7 +709,7 @@ class EmailService:
 </div>
 <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 6px; margin: 32px 0;">
     <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 500;">⚠️ Action Required</p>
-    <p style="font-size: 14px; color: #92400e; margin: 8px 0 0; line-height: 1.5;">Please ensure you are within the designated work area for check-ins. Contact your supervisor if you believe this is an error.</p>
+    <p style="font-size: 14px; color: #92400e; margin: 8px 0 0; line-height: 1.5;">Please ensure you are within the designated work area for {action_text}. Contact your supervisor if you believe this is an error.</p>
 </div>
 <div style="padding-top: 32px; border-top: 1px solid #e2e8f0; margin-top: 40px;">
     <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin: 0;">This is an automated security alert from Staff Track. Your supervisor has been notified.</p>
@@ -722,7 +726,7 @@ class EmailService:
     Hi {supervisor_name},
 </p>
 <p style="font-size: 16px; color: #4b5563; line-height: 1.6; margin: 0 0 36px;">
-    <strong>{employee_name}</strong> has checked in <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
+    <strong>{employee_name}</strong> has {action_text} <strong>{distance_outside:.0f} meters</strong> outside the designated work area.
 </p>
 <div style="background-color: #fef2f2; padding: 24px; border-radius: 12px; margin: 36px 0; border-left: 4px solid #dc2626;">
     <h3 style="font-size: 18px; color: #1f2937; margin: 0 0 16px; font-weight: 600;">Violation Details</h3>
@@ -732,7 +736,7 @@ class EmailService:
             <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{employee_name}</td>
         </tr>
         <tr>
-            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">Check-in Time:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #374151;">{action_label} Time:</td>
             <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #6b7280;">{check_in_time}</td>
         </tr>
         <tr>

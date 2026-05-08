@@ -530,7 +530,8 @@ async def check_in(
                             supervisor_name=f"{supervisor.first_name} {supervisor.surname}",
                             location=location_str or f"Lat: {latitude}, Lng: {longitude}",
                             distance_outside=dist - rad,
-                            check_in_time=current_time.strftime('%H:%M:%S')
+                            check_in_time=current_time.strftime('%H:%M:%S'),
+                            action_type="check_in"
                         )
                         
                         # Send push notifications
@@ -851,7 +852,8 @@ async def check_out(
                             supervisor_name=f"{supervisor.first_name} {supervisor.surname}",
                             location=f"Lat: {latitude}, Lng: {longitude}",
                             distance_outside=dist - rad,
-                            check_in_time=current_time.strftime('%H:%M:%S')
+                            check_in_time=current_time.strftime('%H:%M:%S'),
+                            action_type="check_out"
                         )
                         
                         # Send push notifications
