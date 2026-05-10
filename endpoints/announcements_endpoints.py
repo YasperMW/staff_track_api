@@ -10,7 +10,7 @@ from endpoints.auth_endpoints import get_current_user
 from fcm_service import send_push_notification
 from mail_service import email_service
 
-router = APIRouter(tags=["announcements"], redirect_slashes=False)
+router = APIRouter(tags=["announcements"])
 
 class AnnouncementResponse(BaseModel):
     id: str
@@ -26,12 +26,12 @@ class AnnouncementCreate(BaseModel):
     title: str
     message: str
     type: str
-    target_departments: Optional[List[str]] = None  # List of department names
+    target_departments: Optional[List[str]] = None
     target_role: Optional[str] = None
     is_active: Optional[bool] = True
     expires_at: Optional[str] = None
     attachment_url: Optional[str] = None
-    send_notifications: Optional[bool] = True  # Whether to send notifications
+    send_notifications: Optional[bool] = True
 
 @router.get("/", response_model=List[AnnouncementResponse])
 async def get_announcements(

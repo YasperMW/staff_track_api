@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from endpoints import auth_endpoints, file_endpoints, user_endpoints, lookup_endpoints, attendance_endpoints, notifications_endpoints, requests_endpoints, announcements_endpoints, holidays_endpoints, leave_endpoints, leave_policy_endpoints, notification_preferences_endpoints, reports_endpoints, shift_config_endpoints, dashboard_endpoints, attendance_reports, role_endpoints, grade_endpoints
 from database import engine, seed_default_admin, run_database_migrations, seed_roles
 from models.db_models import Base
@@ -9,6 +12,16 @@ import os
 from dotenv import load_dotenv
 from timezone_config import APP_TIMEZONE, get_current_time
 from timezone_middleware import add_timezone_middleware
+
+
+class RemoveTrailingSlashMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.endswith("/") and request.url.path != "/":
+            new_url = request.url.path[:-1]
+            if request.url.query:
+                new_url += f"?{request.url.query}"
+            return Response(status_code=307, headers={"Location": str(new_url)})
+        return await call_next(request)
 
 # Load environment variables
 load_dotenv()
@@ -98,6 +111,9 @@ app = FastAPI(
 
 # Add timezone middleware
 add_timezone_middleware(app)
+
+# Remove trailing slash middleware
+app.add_middleware(RemoveTrailingSlashMiddleware)
 
 # Configure CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
