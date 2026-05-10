@@ -61,28 +61,25 @@ async def get_announcements(
     # Get announcements that either have no target departments (All Staff) 
     # or match the filter department
     if filter_department:
-        from sqlalchemy import or_, and_
+        from sqlalchemy import or_, select
         
-        target_dept_ids = db.query(Department.department_id).filter(
+        target_dept_ids = select(Department.department_id).where(
             Department.name == filter_department,
             Department.deleted_at.is_(None)
-        ).subquery()
+        ).scalar_subquery()
         
-        ann_subq = db.query(AnnouncementDepartment.department_id).filter(
-            AnnouncementDepartment.announcement_id == Announcement.announcement_id
-        ).subquery()
+        ann_ids_with_target = select(AnnouncementDepartment.announcement_id).where(
+            AnnouncementDepartment.department_id == target_dept_ids
+        ).scalar_subquery()
         
-        ann_query = ann_query.outerjoin(
-            AnnouncementDepartment,
-            Announcement.announcement_id == AnnouncementDepartment.announcement_id
-        ).filter(
+        ann_query = ann_query.filter(
             or_(
-                AnnouncementDepartment.department_id.in_(target_dept_ids),
-                ~db.query(AnnouncementDepartment.announcement_id).filter(
+                Announcement.announcement_id.in_(ann_ids_with_target),
+                ~select(AnnouncementDepartment.announcement_id).where(
                     AnnouncementDepartment.announcement_id == Announcement.announcement_id
                 ).exists()
             )
-        ).distinct()
+        )
     
     if role:
         ann_query = ann_query.join(AnnouncementDepartment).join(Department).filter(
