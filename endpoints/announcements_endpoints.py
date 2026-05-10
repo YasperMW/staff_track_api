@@ -61,30 +61,51 @@ async def get_announcements(
     # Get announcements that either have no target departments (All Staff) 
     # or match the filter department
     if filter_department:
-        from sqlalchemy import or_, select
+        from sqlalchemy import or_
         
-        target_dept_ids = select(Department.department_id).where(
+        target_dept = db.query(Department).filter(
             Department.name == filter_department,
             Department.deleted_at.is_(None)
-        ).scalar_subquery()
+        ).first()
         
-        ann_ids_with_target = select(AnnouncementDepartment.announcement_id).where(
-            AnnouncementDepartment.department_id == target_dept_ids
-        ).scalar_subquery()
-        
-        ann_query = ann_query.filter(
-            or_(
-                Announcement.announcement_id.in_(ann_ids_with_target),
-                ~select(AnnouncementDepartment.announcement_id).where(
-                    AnnouncementDepartment.announcement_id == Announcement.announcement_id
-                ).exists()
+        if target_dept:
+            targeted_ann_ids = [
+                ad.announcement_id for ad in 
+                db.query(AnnouncementDepartment).filter(
+                    AnnouncementDepartment.department_id == target_dept.department_id
+                ).all()
+            ]
+            
+            all_targeted_ids = set(
+                ad.announcement_id for ad in 
+                db.query(AnnouncementDepartment.announcement_id).distinct().all()
             )
-        )
+            
+            if targeted_ann_ids or all_targeted_ids:
+                untargeted_filter = []
+                if all_targeted_ids:
+                    untargeted_filter.append(Announcement.announcement_id.notin_(all_targeted_ids))
+                elif targeted_ann_ids:
+                    untargeted_filter.append(Announcement.announcement_id.notin_(targeted_ann_ids))
+                
+                ann_query = ann_query.filter(
+                    or_(
+                        Announcement.announcement_id.in_(targeted_ann_ids) if targeted_ann_ids else False,
+                        *untargeted_filter
+                    )
+                )
     
     if role:
-        ann_query = ann_query.join(AnnouncementDepartment).join(Department).filter(
-            Department.name == role
-        )
+        role_targeted_ann_ids = [
+            ad.announcement_id for ad in 
+            db.query(AnnouncementDepartment).join(Department).filter(
+                Department.name == role
+            ).all()
+        ]
+        if role_targeted_ann_ids:
+            ann_query = ann_query.filter(
+                Announcement.announcement_id.in_(role_targeted_ann_ids)
+            )
     
     ann_query = ann_query.order_by(Announcement.created_at.desc())
     announcements = ann_query.all()
