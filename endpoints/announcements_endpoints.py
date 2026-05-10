@@ -47,6 +47,48 @@ async def get_announcements(
     ann_query = db.query(Announcement).filter(Announcement.deleted_at.is_(None))
     if activeOnly:
         ann_query = ann_query.filter(Announcement.is_active == True)
+    
+    # Filter by target department if specified or use current user's department
+    filter_department = department
+    if not filter_department and current_user.department_id:
+        user_dept = db.query(Department).filter(
+            Department.department_id == current_user.department_id,
+            Department.deleted_at.is_(None)
+        ).first()
+        if user_dept:
+            filter_department = user_dept.name
+    
+    # Get announcements that either have no target departments (All Staff) 
+    # or match the filter department
+    if filter_department:
+        from sqlalchemy import or_, and_
+        
+        target_dept_ids = db.query(Department.department_id).filter(
+            Department.name == filter_department,
+            Department.deleted_at.is_(None)
+        ).subquery()
+        
+        ann_subq = db.query(AnnouncementDepartment.department_id).filter(
+            AnnouncementDepartment.announcement_id == Announcement.announcement_id
+        ).subquery()
+        
+        ann_query = ann_query.outerjoin(
+            AnnouncementDepartment,
+            Announcement.announcement_id == AnnouncementDepartment.announcement_id
+        ).filter(
+            or_(
+                AnnouncementDepartment.department_id.in_(target_dept_ids),
+                ~db.query(AnnouncementDepartment.announcement_id).filter(
+                    AnnouncementDepartment.announcement_id == Announcement.announcement_id
+                ).exists()
+            )
+        ).distinct()
+    
+    if role:
+        ann_query = ann_query.join(AnnouncementDepartment).join(Department).filter(
+            Department.name == role
+        )
+    
     ann_query = ann_query.order_by(Announcement.created_at.desc())
     announcements = ann_query.all()
 
