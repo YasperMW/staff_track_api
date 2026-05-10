@@ -413,3 +413,24 @@ async def update_announcement(
         createdAt=db_announcement.created_at.isoformat(),
         authorName=f"{db_announcement.creator.first_name} {db_announcement.creator.surname}" if db_announcement.creator else "System"
     )
+
+
+@router.delete("/{announcement_id}", response_model=dict)
+async def delete_announcement(
+    announcement_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_announcement = db.query(Announcement).filter(
+        Announcement.announcement_id == announcement_id,
+        Announcement.deleted_at.is_(None)
+    ).first()
+
+    if not db_announcement:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+
+    db_announcement.deleted_at = datetime.now()
+    db_announcement.updated_at = datetime.now()
+    db.commit()
+
+    return {"message": "Announcement deleted"}

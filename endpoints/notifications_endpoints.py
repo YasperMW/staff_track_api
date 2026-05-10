@@ -13,7 +13,7 @@ from fcm_service import send_push_notification, send_multicast_push_notification
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["notifications"])
+router = APIRouter(tags=["notifications"], redirect_slashes=False)
 
 class NotificationCreate(BaseModel):
     title: str
@@ -107,7 +107,7 @@ async def register_fcm_token(
     db.commit()
     return {"message": "FCM token registered successfully"}
 
-@router.get("/", response_model=List[NotificationResponse])
+@router.get("", response_model=List[NotificationResponse])
 async def get_notifications(
     limit: int = 50,
     offset: int = 0,
@@ -137,7 +137,7 @@ async def get_notifications(
         for notification in notifications
     ]
 
-@router.post("/", response_model=NotificationResponse)
+@router.post("", response_model=NotificationResponse)
 async def create_notification(
     notification: NotificationCreate,
     db: Session = Depends(get_db),
