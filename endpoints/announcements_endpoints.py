@@ -33,7 +33,7 @@ class AnnouncementCreate(BaseModel):
     attachment_url: Optional[str] = None
     send_notifications: Optional[bool] = True  # Whether to send notifications
 
-@router.get("/", response_model=List[AnnouncementResponse])
+@router.get("", response_model=List[AnnouncementResponse])
 async def get_announcements(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
@@ -162,7 +162,7 @@ async def get_announcements(
 
     return combined
 
-@router.post("/", response_model=AnnouncementResponse)
+@router.post("", response_model=AnnouncementResponse)
 async def create_announcement(
     announcement: AnnouncementCreate,
     db: Session = Depends(get_db),
