@@ -130,6 +130,7 @@ class AttendanceLog(Base):
     early_checkout_reason = Column(Text)  # Reason for early check-out (before shift end)
     work_hours = Column(Numeric(5, 2))  # Pre-calculated work hours
     offline_flag = Column(Boolean, default=False)
+    is_extended = Column(Boolean, default=False)  # Whether shift went beyond official end time
     sync_time = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)

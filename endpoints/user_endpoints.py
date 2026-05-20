@@ -6,10 +6,13 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.db_models import User, Role, Department, EmployeeFile, Grade
 from datetime import datetime, timedelta
+from timezone_config import get_current_time
 import jwt
 import os
-import bcrypt
-from dotenv import load_dotenv
+from auth_config import SECRET_KEY, ALGORITHM
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -165,77 +168,22 @@ def get_token_from_bearer(credentials: Optional[HTTPAuthorizationCredentials] = 
         return credentials.credentials
     return None
 
-# Helper function to extract email from JWT token
 def get_email_from_token(token: str) -> Optional[str]:
     try:
-        import jwt
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv()
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-        ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        
-        print(f"Decoding token with algorithm: {ALGORITHM}")
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        print(f"Token payload: {payload}")
         email: str = payload.get("sub")
-        print(f"Extracted email: {email}")
         return email
     except Exception as e:
-        print(f"Error decoding token: {e}")
+        logger.warning("Error decoding token: %s", e)
         return None
 
-# Helper function to verify admin role (optional - you may want to restrict access)
 def verify_admin_role(token: str) -> bool:
     try:
-        import jwt
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv()
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-        ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
-        # Updated with actual role names from database
         return user_role in ["HR", "HR Admin", "System Admin", "System Administrator", "Principal Hospital Administrator", "Head of Department", "Accountant"]
     except:
         return False
-
-@router.get("/debug-token")
-async def debug_token(
-    token: Optional[str] = Depends(get_token_from_bearer)
-):
-    """
-    Debug endpoint to check token payload
-    """
-    if not token:
-        return {"error": "No token provided"}
-    
-    try:
-        import jwt
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv()
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-        ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return {
-            "payload": payload,
-            "role": payload.get("role"),
-            "is_admin": verify_admin_role(token)
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-@router.get("/test")
-async def test_endpoint():
-    """Simple test endpoint to check if the router is working"""
-    return {"message": "User endpoints are working", "status": "ok"}
 
 @router.get("/profile", response_model=UserProfileResponse)
 async def get_current_user_profile(
@@ -245,11 +193,11 @@ async def get_current_user_profile(
     """
     Get the profile of the currently authenticated user.
     """
-    print(f"Profile endpoint called with token: {token is not None}")
+    logger.info("Profile endpoint called with token: %s", token is not None)
     
     # Verify authentication
     if not token:
-        print("No token provided")
+        logger.info("No token provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid authorization header"
@@ -258,14 +206,14 @@ async def get_current_user_profile(
     # Extract email from token
     email = get_email_from_token(token)
     if not email:
-        print("Could not extract email from token")
+        logger.info("Could not extract email from token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token - could not extract user information"
         )
     
     try:
-        print(f"Querying user with email: {email}")
+        logger.info("Querying user with email: %s", email)
         # Query user by email without joins first
         user = db.query(User).filter(
             User.email == email,
@@ -273,13 +221,13 @@ async def get_current_user_profile(
         ).first()
         
         if not user:
-            print(f"User not found with email: {email}")
+            logger.info("User not found with email: %s", email)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         
-        print(f"Found user: {user.first_name} {user.surname}")
+        logger.info("Found user: %s %s", user.first_name, user.surname)
         
         # Get role, department, and designation separately to avoid join issues
         role_name = "Unknown"
@@ -292,20 +240,20 @@ async def get_current_user_profile(
                 if role:
                     role_name = role.name
         except Exception as e:
-            print(f"Error getting role: {e}")
+            logger.warning("Error getting role: %s", e)
         
         try:
             if user.department_id:
                 department = db.query(Department).filter(Department.department_id == user.department_id).first()
                 if department:
                     department_name = department.name
-                    print(f"Found department: {department_name}")
+                    logger.info("Found department: %s", department_name)
                 else:
-                    print(f"No department found for department_id: {user.department_id}")
+                    logger.info("No department found for department_id: %s", user.department_id)
             else:
-                print(f"User has no department_id")
+                logger.info("User has no department_id")
         except Exception as e:
-            print(f"Error getting department: {e}")
+            logger.warning("Error getting department: %s", e)
         
         try:
             if user.designation_id:
@@ -314,7 +262,7 @@ async def get_current_user_profile(
                 if designation:
                     designation_name = designation.name
         except Exception as e:
-            print(f"Error getting designation: {e}")
+            logger.warning("Error getting designation: %s", e)
         
         # Return user profile data
         profile_data = {
@@ -333,13 +281,13 @@ async def get_current_user_profile(
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         }
-        print(f"Profile response data: {profile_data}")
+        logger.info("Profile response data: %s", profile_data)
         return UserProfileResponse(**profile_data)
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Database error: {e}")
+        logger.warning("Database error: %s", e)
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -356,11 +304,11 @@ async def get_complete_user_profile(
     Get the complete profile of the currently authenticated user.
     Returns all information submitted during account creation.
     """
-    print(f"Complete profile endpoint called with token: {token is not None}")
+    logger.info("Complete profile endpoint called with token: %s", token is not None)
     
     # Verify authentication
     if not token:
-        print("No token provided")
+        logger.info("No token provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid authorization header"
@@ -369,14 +317,14 @@ async def get_complete_user_profile(
     # Extract email from token
     email = get_email_from_token(token)
     if not email:
-        print("Could not extract email from token")
+        logger.info("Could not extract email from token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token - could not extract user information"
         )
     
     try:
-        print(f"Querying complete user profile with email: {email}")
+        logger.info("Querying complete user profile with email: %s", email)
         # Query user with all relationships
         user = db.query(User).filter(
             User.email == email,
@@ -384,13 +332,13 @@ async def get_complete_user_profile(
         ).first()
         
         if not user:
-            print(f"User not found with email: {email}")
+            logger.info("User not found with email: %s", email)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         
-        print(f"Found complete user: {user.first_name} {user.surname}")
+        logger.info("Found complete user: %s %s", user.first_name, user.surname)
         
         # Get related information
         role_name = user.role.name if user.role else "Unknown"
@@ -441,13 +389,13 @@ async def get_complete_user_profile(
             "grade_id": str(user.grade_id) if user.grade_id else None,
             "grade_name": grade_name
         }
-        print(f"Complete profile response data prepared with {len([k for k, v in profile_data.items() if v is not None])} fields")
+        logger.info("Complete profile response data prepared with %d fields", len([k for k, v in profile_data.items() if v is not None]))
         return CompleteUserProfileResponse(**profile_data)
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Database error: {e}")
+        logger.warning("Database error: %s", e)
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -486,7 +434,7 @@ async def update_profile_photo(
             )
         
         user.profile_photo_url = request.profile_photo_url
-        user.updated_at = datetime.utcnow()
+        user.updated_at = get_current_time()
         db.commit()
         
         return {"success": True, "message": "Profile photo updated successfully", "profile_photo_url": request.profile_photo_url}
@@ -500,20 +448,19 @@ async def update_profile_photo(
 @router.get("/users", response_model=UsersListResponse)
 async def get_all_users(
     token: Optional[str] = Depends(get_token_from_bearer),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    page: int = 1,
+    page_size: int = 50,
 ):
     """
-    Get all users from the database.
-    Returns comprehensive user data including roles and departments.
+    Get all users from the database with pagination.
     """
-    # Verify authentication (optional - remove if you want public access)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid authorization header"
         )
     
-    # Verify admin role (optional - remove if you want all authenticated users to access)
     if not verify_admin_role(token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -521,8 +468,20 @@ async def get_all_users(
         )
     
     try:
-        # Query all users including their roles and departments with explicit join conditions
-        users = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).all()
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+        offset = (page - 1) * page_size
+        
+        total_count = db.query(User).count()
+        
+        users = (
+            db.query(User)
+            .join(Role, User.role_id == Role.role_id)
+            .outerjoin(Department, User.department_id == Department.department_id)
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
         
         user_responses = []
         for user in users:
@@ -573,7 +532,7 @@ async def get_all_users(
             success=True,
             message=f"Successfully retrieved {len(user_responses)} users",
             users=user_responses,
-            total_count=len(user_responses)
+            total_count=total_count
         )
         
     except Exception as e:
@@ -585,10 +544,12 @@ async def get_all_users(
 @router.get("/users/active", response_model=UsersListResponse)
 async def get_active_users(
     token: Optional[str] = Depends(get_token_from_bearer),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    page: int = 1,
+    page_size: int = 50,
 ):
     """
-    Get only active (non-deleted) users from the database.
+    Get only active (non-deleted) users from the database with pagination.
     """
     if not token:
         raise HTTPException(
@@ -603,12 +564,23 @@ async def get_active_users(
         )
     
     try:
-        # Query only active users (not deleted) with explicit join conditions
-        users = db.query(User).join(Role, User.role_id == Role.role_id).outerjoin(Department, User.department_id == Department.department_id).filter(
-            User.deleted_at.is_(None)
-        ).all()
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+        offset = (page - 1) * page_size
         
-        print(f"Query executed successfully, found {len(users)} users")
+        total_count = db.query(User).filter(User.deleted_at.is_(None)).count()
+        
+        users = (
+            db.query(User)
+            .join(Role, User.role_id == Role.role_id)
+            .outerjoin(Department, User.department_id == Department.department_id)
+            .filter(User.deleted_at.is_(None))
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+        
+        logger.info("Query executed successfully, found %d users", len(users))
         
         user_responses = []
         for user in users:
@@ -672,18 +644,18 @@ async def get_active_users(
                 )
                 user_responses.append(user_data)
             except Exception as user_err:
-                print(f"Error processing user {user.user_id}: {user_err}")
+                logger.warning("Error processing user %s: %s", user.user_id, user_err)
                 continue
         
         return UsersListResponse(
             success=True,
             message=f"Successfully retrieved {len(user_responses)} active users",
             users=user_responses,
-            total_count=len(user_responses)
+            total_count=total_count
         )
         
     except Exception as e:
-        print(f"Error in get_active_users: {e}")
+        logger.warning("Error in get_active_users: %s", e)
         db.rollback()  # Rollback failed transaction
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -795,21 +767,11 @@ async def update_user_role(
             detail="Missing or invalid authorization header"
         )
     
-    # Verify system admin role specifically
     try:
-        import jwt
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv()
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-        ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
         
-        # Only allow System Admins to change roles
-        if not user_role or not user_role.lower() in ['system admin', 'system administrator']:
+        if not user_role or user_role.lower() not in ['system admin', 'system administrator']:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only System Admins can change user roles"
@@ -845,13 +807,13 @@ async def update_user_role(
         # Update user role
         old_role_name = user.role.name if user.role else "Unknown"
         user.role_id = request.role_id
-        user.updated_at = datetime.utcnow()
+        user.updated_at = get_current_time()
         
         db.commit()
         db.refresh(user)
         
         # Log the role change (you might want to add an audit log table)
-        print(f"User {user.first_name} {user.surname} role changed from {old_role_name} to {new_role.name} by System Admin")
+        logger.info("User %s %s role changed from %s to %s by System Admin", user.first_name, user.surname, old_role_name, new_role.name)
         
         # Return updated user data
         user_data = UserResponse(
@@ -906,7 +868,7 @@ async def update_user_role(
         raise
     except Exception as e:
         db.rollback()
-        print(f"Error updating user role: {e}")
+        logger.warning("Error updating user role: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating user role: {str(e)}"
@@ -1011,7 +973,7 @@ async def update_user(
     if request.is_head_of_department is not None:
         user.is_head_of_department = request.is_head_of_department
     
-    user.updated_at = datetime.utcnow()
+    user.updated_at = get_current_time()
     
     db.commit()
     db.refresh(user)
@@ -1029,17 +991,13 @@ async def lock_user_account(
     token: Optional[str] = Depends(get_token_from_bearer),
     db: Session = Depends(get_db)
 ):
-    load_dotenv()
-    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-    ALGORITHM = os.getenv("ALGORITHM", "HS256")
-
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authorization header")
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         admin_role: str = payload.get("role")
-        if not admin_role or not admin_role.lower() in ['system admin', 'system administrator']:
+        if not admin_role or admin_role.lower() not in ['system admin', 'system administrator']:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only System Admins can lock accounts")
         admin_email: str = payload.get("sub")
     except Exception:
@@ -1057,7 +1015,7 @@ async def lock_user_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if request.lock_duration_minutes is not None and request.lock_duration_minutes > 0:
-        target_user.locked_until = datetime.utcnow() + timedelta(minutes=request.lock_duration_minutes)
+        target_user.locked_until = get_current_time() + timedelta(minutes=request.lock_duration_minutes)
         target_user.failed_login_attempts = 0
         message = f"Account locked for {request.lock_duration_minutes} minutes"
     else:
@@ -1065,7 +1023,7 @@ async def lock_user_account(
         target_user.failed_login_attempts = 0
         message = "Account lock removed"
 
-    target_user.updated_at = datetime.utcnow()
+    target_user.updated_at = get_current_time()
     db.commit()
     db.refresh(target_user)
 
@@ -1078,17 +1036,13 @@ async def hard_delete_user_account(
     token: Optional[str] = Depends(get_token_from_bearer),
     db: Session = Depends(get_db)
 ):
-    load_dotenv()
-    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-    ALGORITHM = os.getenv("ALGORITHM", "HS256")
-
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authorization header")
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         admin_role: str = payload.get("role")
-        if not admin_role or not admin_role.lower() in ['system admin', 'system administrator']:
+        if not admin_role or admin_role.lower() not in ['system admin', 'system administrator']:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only System Admins can delete accounts")
         admin_email: str = payload.get("sub")
     except Exception:
@@ -1138,23 +1092,15 @@ async def update_user_grade(
         )
     
     try:
-        import jwt
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv()
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-        ALGORITHM = os.getenv("ALGORITHM", "HS256")
-        
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_role: str = payload.get("role")
         
-        if not user_role or not user_role.lower() in ['system admin', 'system administrator']:
+        if not user_role or user_role.lower() not in ['system admin', 'system administrator']:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only System Admins can change user grades"
             )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid authentication token"
@@ -1187,7 +1133,7 @@ async def update_user_grade(
         old_grade_name = user.grade.name if user.grade else "None"
         
         user.grade_id = grade.grade_id
-        user.updated_at = datetime.utcnow()
+        user.updated_at = get_current_time()
         db.commit()
         db.refresh(user)
         

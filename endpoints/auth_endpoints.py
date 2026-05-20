@@ -7,10 +7,8 @@ import hashlib
 import jwt
 from datetime import datetime, timedelta
 import uuid
-import os
 import random
 import string
-from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from database import get_db
 from mail_service import email_service
@@ -19,6 +17,10 @@ from fcm_service import send_push_notification
 from timezone_config import get_current_time, to_utc
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from auth_config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, MAX_FAILED_ATTEMPTS, LOCKOUT_MINUTES, NOTIFY_AFTER_FAILED_ATTEMPTS, GOOGLE_CLIENT_ID
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -63,17 +65,6 @@ def determine_role(department_name: str, designation_name: str) -> tuple[str, bo
     # 6. Default: Regular Staff
     return "Staff", False
 
-# Load environment variables
-load_dotenv()
-
-# Get configuration from environment
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-
-
-
 @router.get("/grades")
 async def get_grades(db: Session = Depends(get_db)):
     """Fetch all grades"""
@@ -86,34 +77,23 @@ async def get_grades(db: Session = Depends(get_db)):
         }
         for g in grades
     ]
-    if 'system admin' not in user_role and 'system administrator' not in user_role:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only System Admins can delete grades"
-        )
-    
-    grade = db.query(Grade).filter(Grade.grade_id == grade_id, Grade.deleted_at.is_(None)).first()
-    if not grade:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Grade not found"
-        )
-    
-    # Check if any users are assigned to this grade
-    if grade.users:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete grade that is assigned to users. Reassign users first."
-        )
-    
-    grade.deleted_at = get_current_time()
-    grade.deleted_by = current_user.user_id
-    db.commit()
-    
-    return {"success": True}
 
 # Helper functions
 import bcrypt
+
+def validate_password_strength(password: str) -> Optional[str]:
+    """Validate password strength. Returns error message or None if valid."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters long"
+    if not any(c.isupper() for c in password):
+        return "Password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return "Password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return "Password must contain at least one digit"
+    if not any(c in "!@#$%^&*()_+-=[]{}|;':\",./<>?`~" for c in password):
+        return "Password must contain at least one special character"
+    return None
 
 def hash_password(password: str) -> str:
     """Hash password using bcrypt with salt"""
@@ -170,8 +150,23 @@ def create_otp_record(db: Session, email: str, purpose: str) -> str:
     
     return otp_code
 
+MAX_OTP_ATTEMPTS = 10
+
 def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> bool:
     """Verify OTP code"""
+    # First, check if there are too many failed attempts
+    recent_otp = db.query(EmailVerification).filter(
+        EmailVerification.email == email,
+        EmailVerification.purpose == purpose,
+        EmailVerification.is_used == False
+    ).order_by(EmailVerification.created_at.desc()).first()
+    
+    if recent_otp and recent_otp.attempts >= MAX_OTP_ATTEMPTS:
+        recent_otp.is_used = True
+        recent_otp.updated_at = get_current_time()
+        db.commit()
+        return False
+    
     otp_record = db.query(EmailVerification).filter(
         EmailVerification.email == email,
         EmailVerification.otp_code == otp_code,
@@ -181,18 +176,10 @@ def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> boo
     ).first()
     
     if not otp_record:
-        # Update attempts for the most recent unused OTP
-        recent_otp = db.query(EmailVerification).filter(
-            EmailVerification.email == email,
-            EmailVerification.purpose == purpose,
-            EmailVerification.is_used == False
-        ).order_by(EmailVerification.created_at.desc()).first()
-        
         if recent_otp:
             recent_otp.attempts += 1
             recent_otp.updated_at = get_current_time()
             db.commit()
-        
         return False
     
     # Mark OTP as used
@@ -201,11 +188,6 @@ def verify_otp_code(db: Session, email: str, otp_code: str, purpose: str) -> boo
     db.commit()
     
     return True
-
-# Endpoints
-MAX_FAILED_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
-LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
-NOTIFY_AFTER_FAILED_ATTEMPTS = int(os.getenv("NOTIFY_AFTER_FAILED_ATTEMPTS", "3"))
 
 @router.post("/login", response_model=AuthResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -279,7 +261,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                             }
                         )
                     except Exception as e:
-                        print(f"Failed to send push notification: {e}")
+                        logger.warning("Failed to send push notification: %s", e)
 
         # Lock account if too many failed attempts
         if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
@@ -300,7 +282,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                             }
                         )
                     except Exception as e:
-                        print(f"Failed to send push notification: {e}")
+                        logger.warning("Failed to send push notification: %s", e)
 
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -387,6 +369,14 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
             date_of_employment_val = date.fromisoformat(request.date_of_employment)
         except ValueError:
             pass
+    
+    # Validate password strength
+    password_error = validate_password_strength(request.password)
+    if password_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=password_error
+        )
     
     # Create new user with pending status
     hashed_password = hash_password(request.password)
@@ -624,7 +614,7 @@ async def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
                 try:
                     NotificationService.create_default_preferences(db, str(user.user_id))
                 except Exception as e:
-                    print(f"Failed to create notification preferences: {e}")
+                    logger.warning("Failed to create notification preferences: %s", e)
                 
                 # Send welcome email
                 try:
@@ -635,7 +625,7 @@ async def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
                     )
                 except Exception as e:
                     # Log error but don't fail the verification
-                    print(f"Failed to send welcome email: {e}")
+                    logger.warning("Failed to send welcome email: %s", e)
         
         return OTPResponse(
             success=True,
@@ -705,6 +695,14 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
                 detail="User not found"
             )
         
+        # Validate new password strength
+        password_error = validate_password_strength(request.new_password)
+        if password_error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=password_error
+            )
+
         # Hash new password and update
         user.password_hash = hash_password(request.new_password)
         user.updated_at = get_current_time()
@@ -715,7 +713,7 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
             await email_service.send_password_reset_email(user.email, user.first_name)
         except Exception as e:
             # Log error but don't fail the password reset
-            print(f"Failed to send password reset confirmation email: {e}")
+            logger.warning("Failed to send password reset confirmation email: %s", e)
 
         # Send push notification for password change
         try:
@@ -731,7 +729,7 @@ async def confirm_password_reset(request: ConfirmPasswordResetRequest, db: Sessi
                         }
                     )
         except Exception as e:
-            print(f"Failed to send password change push notification: {e}")
+            logger.warning("Failed to send password change push notification: %s", e)
         
         return AuthResponse(
             success=True,
@@ -767,11 +765,12 @@ async def change_password(
                 detail="Current password is incorrect"
             )
         
-        # Validate new password
-        if len(request.new_password) < 8:
+        # Validate new password strength
+        password_error = validate_password_strength(request.new_password)
+        if password_error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="New password must be at least 8 characters long"
+                detail=password_error
             )
         
         # Check if new password is same as current password
@@ -794,7 +793,7 @@ async def change_password(
             )
         except Exception as e:
             # Log error but don't fail the password change
-            print(f"Failed to send password change confirmation email: {e}")
+            logger.warning("Failed to send password change confirmation email: %s", e)
 
         # Send push notification for password change
         try:
@@ -810,7 +809,7 @@ async def change_password(
                         }
                     )
         except Exception as e:
-            print(f"Failed to send password change push notification: {e}")
+            logger.warning("Failed to send password change push notification: %s", e)
         
         return AuthResponse(
             success=True,
@@ -1046,7 +1045,7 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
     try:
         NotificationService.create_default_preferences(db, str(new_user.user_id))
     except Exception as e:
-        print(f"Failed to create notification preferences: {e}")
+        logger.warning("Failed to create notification preferences: %s", e)
 
     # Send welcome email
     try:
@@ -1056,7 +1055,7 @@ async def google_register(request: GoogleRegisterRequest, db: Session = Depends(
             new_user.role.name
         )
     except Exception as e:
-        print(f"Failed to send welcome email: {e}")
+        logger.warning("Failed to send welcome email: %s", e)
 
     # Create JWT token
     token = create_access_token(data={"sub": new_user.email, "role": new_user.role.name})

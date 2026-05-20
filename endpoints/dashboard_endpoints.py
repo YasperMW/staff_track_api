@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, desc, text
@@ -7,15 +8,23 @@ from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, AttendanceLog, Department, Request
 from timezone_config import get_current_time
+from auth_deps import ADMIN_ROLES
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+def _check_admin(current_user: User):
+    if current_user.role is None or current_user.role.name not in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 @router.get("/weekly-trend")
 async def get_weekly_trend(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get attendance counts for the last 7 days"""
+    """Get attendance check-in/out trends"""
+    _check_admin(current_user)
     today = get_current_time().date()
     start_date = today - timedelta(days=6)
     
@@ -58,6 +67,7 @@ async def get_department_distribution(
     current_user: User = Depends(get_current_user)
 ):
     """Get staff count distribution across departments"""
+    _check_admin(current_user)
     results = db.query(
         Department.name,
         func.count(User.user_id).label('count')
@@ -87,6 +97,7 @@ async def get_analytics_stats(
     current_user: User = Depends(get_current_user)
 ):
     """Get high-level analytics for the dashboard"""
+    _check_admin(current_user)
     # 1. Weekly Trend Change (%)
     # Compare this week's attendance with last week's
     today = get_current_time().date()
@@ -144,6 +155,7 @@ async def get_performance_metrics(
     current_user: User = Depends(get_current_user)
 ):
     """Get team performance metrics"""
+    _check_admin(current_user)
     # 1. Productivity (simplified: percentage of shifts completed)
     today = get_current_time().date()
     today_start = datetime.combine(today, datetime.min.time())
@@ -246,6 +258,7 @@ async def get_activity_heatmap(
     current_user: User = Depends(get_current_user)
 ):
     """Get activity heatmap data for the last 4 weeks"""
+    _check_admin(current_user)
     today = get_current_time().date()
     weeks_data = []
 

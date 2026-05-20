@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +10,10 @@ import os
 from dotenv import load_dotenv
 from timezone_config import APP_TIMEZONE, get_current_time
 from timezone_middleware import add_timezone_middleware
+from logger import logger as _  # ensure logging is configured
+from rate_limiter import IPRateLimitMiddleware
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -37,8 +42,8 @@ async def lifespan(app: FastAPI):
     from attendance_scheduler import attendance_scheduler
 
     # Initialize timezone configuration
-    print(f"🌍 Staff Track API initialized with timezone: {APP_TIMEZONE.zone}")
-    print(f"📅 Current time in {APP_TIMEZONE.zone}: {get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    logger.info("Staff Track API initialized with timezone: %s", APP_TIMEZONE.zone)
+    logger.info("Current time in %s: %s", APP_TIMEZONE.zone, get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z'))
 
     # Fix attendance records with wrong shift types (if enabled)
     ATTENDANCE_FIX_ENABLED = os.getenv("ATTENDANCE_FIX_ENABLED", "false").lower() == "true"
@@ -48,9 +53,9 @@ async def lifespan(app: FastAPI):
             with SessionLocal() as db:
                 fixed_count = ShiftTimes.fix_attendance_records(db)
                 if fixed_count > 0:
-                    print(f"🔧 Fixed {fixed_count} attendance records with wrong shift types")
+                    logger.info("Fixed %d attendance records with wrong shift types", fixed_count)
         except Exception as e:
-            print(f"Error fixing attendance records: {e}")
+            logger.error("Error fixing attendance records: %s", e)
 
     HOLIDAYS_SYNC_ENABLED = os.getenv("HOLIDAYS_SYNC_ENABLED", "true").lower() == "true"
     HOLIDAYS_SYNC_COUNTRY = os.getenv("HOLIDAYS_SYNC_COUNTRY", "MW")
@@ -75,7 +80,7 @@ async def lifespan(app: FastAPI):
                 await attendance_scheduler.send_check_out_reminders()
                 await attendance_scheduler.send_late_checkin_alerts()
             except Exception as e:
-                print(f"Error in attendance scheduler: {e}")
+                logger.error("Error in attendance scheduler: %s", e)
             # Check every minute
             await asyncio.sleep(60)
 
@@ -100,14 +105,27 @@ app = FastAPI(
 add_timezone_middleware(app)
 
 # Configure CORS
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_origins_str = os.getenv("CORS_ORIGINS", "*")
+if cors_origins_str == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    cors_origins = [o.strip() for o in cors_origins_str.split(",")]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Add IP-based rate limiting for auth endpoints (60 req/min per IP)
+app.add_middleware(IPRateLimitMiddleware, max_requests=60, window_seconds=60)
 
 # Include routers
 app.include_router(auth_endpoints.router, prefix="/auth", tags=["auth"])

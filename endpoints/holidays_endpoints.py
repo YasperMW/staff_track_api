@@ -1,4 +1,5 @@
 from datetime import datetime, date
+from timezone_config import get_current_time
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -41,7 +42,7 @@ async def get_holidays(
 ):
     """Get holidays for a specific year, optionally filtered by category"""
     
-    target_year = year or datetime.now().year
+    target_year = year or get_current_time().year
     
     # Build query
     query = db.query(Holiday).filter(
@@ -78,7 +79,7 @@ async def get_upcoming_holidays(
 ):
     """Get upcoming holidays within specified months, optionally filtered by category"""
     
-    current_date = datetime.now().date()
+    current_date = get_current_time().date()
     target_date = datetime(current_date.year + (current_date.month + months - 1) // 12, 
                           ((current_date.month + months - 1) % 12) + 1, 1).date()
     
@@ -129,8 +130,8 @@ async def create_holiday(
         country_code="MW" if holiday.category == "public" else None,
         is_recurring=holiday.isRecurring,
         created_by=current_user.user_id if holiday.category == "institutional" else None,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+        created_at=get_current_time(),
+        updated_at=get_current_time()
     )
     
     db.add(new_holiday)
@@ -192,8 +193,8 @@ async def fetch_public_holidays(
                         source="calendarific",
                         country_code=country_code,
                         is_recurring=True,
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
+                        created_at=get_current_time(),
+                        updated_at=get_current_time()
                     )
                     db.add(new_holiday)
                     db.commit()
@@ -240,8 +241,8 @@ async def fetch_public_holidays(
                         source="nager",
                         country_code=country_code,
                         is_recurring=True,
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
+                        created_at=get_current_time(),
+                        updated_at=get_current_time()
                     )
                     db.add(new_holiday)
                     db.commit()
@@ -280,9 +281,9 @@ async def delete_holiday(
         raise HTTPException(status_code=403, detail="Cannot delete public holidays fetched from government API")
     
     # Soft delete
-    holiday.deleted_at = datetime.now()
+    holiday.deleted_at = get_current_time()
     holiday.deleted_by = current_user.user_id
-    holiday.updated_at = datetime.now()
+    holiday.updated_at = get_current_time()
     
     db.commit()
     

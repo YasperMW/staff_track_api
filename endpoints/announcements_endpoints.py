@@ -1,14 +1,18 @@
 from datetime import datetime
+from timezone_config import get_current_time
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import get_db
 from models.db_models import User, Announcement, Department, Role, AnnouncementDepartment, Notification, Holiday, UserFCMToken
 from endpoints.auth_endpoints import get_current_user
 from fcm_service import send_push_notification
 from mail_service import email_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["announcements"], redirect_slashes=False)
 
@@ -23,15 +27,15 @@ class AnnouncementResponse(BaseModel):
     authorName: str
 
 class AnnouncementCreate(BaseModel):
-    title: str
-    message: str
-    type: str
-    target_departments: Optional[List[str]] = None  # List of department names
-    target_role: Optional[str] = None
+    title: str = Field(max_length=200)
+    message: str = Field(max_length=5000)
+    type: str = Field(max_length=50)
+    target_departments: Optional[List[str]] = None
+    target_role: Optional[str] = Field(default=None, max_length=100)
     is_active: Optional[bool] = True
-    expires_at: Optional[str] = None
-    attachment_url: Optional[str] = None
-    send_notifications: Optional[bool] = True  # Whether to send notifications
+    expires_at: Optional[str] = Field(default=None, max_length=30)
+    attachment_url: Optional[str] = Field(default=None, max_length=500)
+    send_notifications: Optional[bool] = True
 
 @router.get("", response_model=List[AnnouncementResponse])
 async def get_announcements(
@@ -170,6 +174,11 @@ async def create_announcement(
 ):
     """Create a new announcement and send notifications to target departments"""
     
+    # Only admins can create announcements
+    admin_roles = ['HR', 'System Admin', 'System Administrator', 'Principal Hospital Administrator', 'HR Admin']
+    if current_user.role is None or current_user.role.name not in admin_roles:
+        raise HTTPException(status_code=403, detail="Only administrators can create announcements")
+    
     # Parse expires_at if provided
     expires_at = None
     if announcement.expires_at:
@@ -194,8 +203,8 @@ async def create_announcement(
         expires_at=expires_at,
         attachment_url=announcement.attachment_url,
         created_by=current_user.user_id,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+        created_at=get_current_time(),
+        updated_at=get_current_time()
     )
     
     db.add(new_announcement)
@@ -274,8 +283,8 @@ async def _send_announcement_notifications(
                 message=announcement.message,
                 type="announcement",
                 is_read=False,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             notifications_to_create.append(notification)
         
@@ -313,11 +322,11 @@ async def _send_announcement_notifications(
                             author_name=creator_name
                         )
                     except Exception as e:
-                        print(f"Failed to send announcement email to {user.email}: {e}")
+                        logger.warning("Failed to send announcement email to %s: %s", user.email, e)
             
     except Exception as e:
         # Log error but don't fail the announcement creation
-        print(f"Failed to send notifications: {e}")
+        logger.warning("Failed to send notifications: %s", e)
 
 
 class AnnouncementUpdate(BaseModel):
@@ -399,7 +408,7 @@ async def update_announcement(
         else:
             db_announcement.target_audience = "All Staff"
     
-    db_announcement.updated_at = datetime.now()
+    db_announcement.updated_at = get_current_time()
     db.commit()
     db.refresh(db_announcement)
     
@@ -429,8 +438,8 @@ async def delete_announcement(
     if not db_announcement:
         raise HTTPException(status_code=404, detail="Announcement not found")
 
-    db_announcement.deleted_at = datetime.now()
-    db_announcement.updated_at = datetime.now()
+    db_announcement.deleted_at = get_current_time()
+    db_announcement.updated_at = get_current_time()
     db.commit()
 
     return {"message": "Announcement deleted"}

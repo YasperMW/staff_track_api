@@ -7,6 +7,9 @@ from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, LeaveBalance, Notification
 from datetime import datetime
 from fcm_service import send_push_notification
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leave", tags=["leave"])
 
@@ -102,6 +105,6 @@ async def allocate_leave(
                     }
                 )
             except Exception as e:
-                print(f"Failed to send push notification: {e}")
+                logger.warning("Failed to send push notification: %s", e)
 
     return {"success": True}

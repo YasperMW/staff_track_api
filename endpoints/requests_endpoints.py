@@ -1,9 +1,11 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import date, datetime
+from timezone_config import get_current_time
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import get_db
 from endpoints.auth_endpoints import get_current_user
 from models.db_models import User, RequestApproval, Notification, LeaveBalance, Role, Request
@@ -11,21 +13,20 @@ from fcm_service import send_push_notification
 from mail_service import email_service
 from notification_service import notification_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/requests", tags=["requests"])
 
 
 class RequestCreate(BaseModel):
-    type: str
-    start_date: str
-    end_date: Optional[str] = None
-    # Section A - Leave Request
+    type: str = Field(max_length=50)
+    start_date: str = Field(max_length=10)
+    end_date: Optional[str] = Field(default=None, max_length=10)
     leave_grant_required: bool = False
-    contact_address: Optional[str] = None
-    # Section A - Trip Request
-    reason_for_leaving: Optional[str] = None
-    travel_date: Optional[str] = None
-    travel_place: Optional[str] = None
-    # Section B - Trip Costs
+    contact_address: Optional[str] = Field(default=None, max_length=500)
+    reason_for_leaving: Optional[str] = Field(default=None, max_length=500)
+    travel_date: Optional[str] = Field(default=None, max_length=10)
+    travel_place: Optional[str] = Field(default=None, max_length=255)
     cost_accommodation: Optional[float] = None
     cost_breakfast: Optional[float] = None
     cost_lunch: Optional[float] = None
@@ -77,7 +78,7 @@ async def get_all_requests(
     """
     Get all requests with optional filtering and pagination
     """
-    print(f"Get all requests called by user: {current_user.user_id}, role: {current_user.role}")
+    logger.info("Get all requests called by user: %s, role: %s", current_user.user_id, current_user.role)
     
     # Check if user is admin/HR to see all requests
     is_admin = current_user.role and current_user.role.name.lower() in ['admin', 'administrator', 'hr', 'system admin', 'principal hospital administrator']
@@ -140,7 +141,7 @@ async def get_all_requests(
     params.update({"limit": limit, "offset": offset})
     
     result = db.execute(text(query), params).fetchall()
-    print(f"Found {len(result)} requests for user {current_user.user_id}")
+    logger.info("Found %d requests for user %s", len(result), current_user.user_id)
     
     requests = []
     
@@ -261,7 +262,7 @@ async def create_request(
             # The user said grade selection is added during registration, so new users will have it.
             pass
 
-    now = datetime.utcnow()
+    now = get_current_time()
     # Determine initial approver - always start with HOD
     # Approval chain: HOD (Level 1) -> HR (Level 2) -> Admin (Level 3) -> Accountant (Level 4)
     approver_id = None
@@ -352,7 +353,7 @@ async def create_request(
             )
         except Exception as e:
             # Log error but don't fail the request creation
-            print(f"Failed to send notification to approver: {e}")
+            logger.warning("Failed to send notification to approver: %s", e)
 
     return {"success": True, "id": str(new_request.request_id)}
 
@@ -401,127 +402,6 @@ async def get_request_approvals(
     ]
 
 
-@router.get("/admin/my-requests")
-async def get_my_requests(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    print(f"My requests called by user: {current_user.user_id}")
-    
-    result = db.execute(
-        text(
-            """
-            SELECT 
-                r.request_id,
-                r.type,
-                r.start_date,
-                r.end_date,
-                r.status,
-                u.first_name,
-                u.surname,
-                u.user_id,
-                r.created_at,
-                r.approval_level,
-                r.leave_grant_required,
-                r.contact_address
-            FROM requests r
-            JOIN users u ON u.user_id = r.user_id
-            WHERE r.status = 'pending'
-              AND r.deleted_at IS NULL
-              AND r.user_id = :user_id
-            ORDER BY r.created_at DESC
-            """
-        ),
-        {"user_id": current_user.user_id},
-    ).fetchall()
-    
-    print(f"Found {len(result)} my requests for user {current_user.user_id}")
-
-    requests = []
-
-    for row in result:
-        start_date = row[2]
-        end_date = row[3]
-        created_at = row[8]
-        
-        if end_date and end_date != start_date:
-            date_range = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}"
-        else:
-            date_range = start_date.strftime("%b %d")
-        
-        # Calculate duration - for leave duty station, show "travelling day" instead of duration
-        if row[1].lower() == "leave duty station":
-            duration = "travelling day"
-        else:
-            duration = 1
-            if end_date and end_date != start_date:
-                duration = (end_date - start_date).days + 1
-            duration = f"{duration} day{'s' if duration > 1 else ''}"
-        
-        requests.append({
-            "id": str(row[0]),
-            "type": row[1],
-            "date_range": date_range,
-            "duration": duration,
-            "description": f"{row[1]} request for {duration}",
-            "created_at": created_at.isoformat() if created_at else None,
-            "user_id": str(row[7]),
-            "user_name": f"{row[5] or ''} {row[6] or ''}".strip(),
-            "approval_level": row[9],
-            "leave_grant_required": row[10],
-            "contact_address": row[11],
-        })
-
-    return requests
-
-
-@router.get("/admin/all-pending-debug")
-async def get_all_pending_requests_debug(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    print(f"Debug: All pending requests called by user: {current_user.user_id}")
-    
-    result = db.execute(
-        text(
-            """
-            SELECT 
-                r.request_id,
-                r.type,
-                r.start_date,
-                r.end_date,
-                r.status,
-                r.current_approver_id,
-                u.first_name,
-                u.surname,
-                u.user_id
-            FROM requests r
-            JOIN users u ON u.user_id = r.user_id
-            WHERE r.status = 'pending'
-              AND r.deleted_at IS NULL
-            ORDER BY r.created_at DESC
-            """
-        )
-    ).fetchall()
-    
-    print(f"Debug: Found {len(result)} total pending requests")
-    
-    requests = []
-    for row in result:
-        requests.append({
-            "id": str(row[0]),
-            "type": row[1],
-            "start_date": str(row[2]),
-            "end_date": str(row[3]),
-            "status": row[4],
-            "current_approver_id": str(row[5]) if row[5] else None,
-            "user_name": f"{row[6] or ''} {row[7] or ''}".strip(),
-            "user_id": str(row[8]),
-        })
-    
-    return requests
-
-
 @router.get("/admin/pending-list")
 async def get_admin_pending_requests_list(
     status_filter: Optional[str] = None,
@@ -534,7 +414,7 @@ async def get_admin_pending_requests_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    print(f"Admin pending requests called by user: {current_user.user_id}, role: {current_user.role}")
+    logger.info("Admin pending requests called by user: %s, role: %s", current_user.user_id, current_user.role)
     if not current_user.role or not current_user.role.name:
         pass
 
@@ -611,7 +491,7 @@ async def get_admin_pending_requests_list(
     query = f"{query} ORDER BY {sort_col} {sort_dir} LIMIT :limit OFFSET :offset"
     params.update({"limit": limit, "offset": offset})
     result = db.execute(text(query), params).fetchall()
-    print(f"Found {len(result)} pending requests for admin {current_user.user_id} (is_admin: {is_admin})")
+    logger.info("Found %d pending requests for admin %s (is_admin: %s)", len(result), current_user.user_id, is_admin)
 
     requests = []
 
@@ -679,7 +559,7 @@ async def approve_request(
     # Allow any approver with the correct role to approve (not just current_approver_id)
     # The approval level check will determine if they're authorized
 
-    now = datetime.utcnow()
+    now = get_current_time()
     next_approver_id = None
     
     # Create the approval record with common fields
@@ -863,7 +743,7 @@ async def approve_request(
                     force_send=True
                 )
             except Exception as e:
-                print(f"Failed to send final approval notification: {e}")
+                logger.warning("Failed to send final approval notification: %s", e)
         else:
             # Partial approval - still pending other approvals
             try:
@@ -892,7 +772,7 @@ async def approve_request(
                     force_send=True
                 )
             except Exception as e:
-                print(f"Failed to send partial approval notification: {e}")
+                logger.warning("Failed to send partial approval notification: %s", e)
 
     # Notify next approver if there is one
     if next_approver_id:
@@ -910,7 +790,7 @@ async def approve_request(
                 force_send=True
             )
         except Exception as e:
-            print(f"Failed to send escalation notification: {e}")
+            logger.warning("Failed to send escalation notification: %s", e)
 
     return {"success": True}
 
@@ -1012,7 +892,10 @@ async def get_team_requests(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get requests from all team members except the current user"""
+    """Get requests from team members in the same department, excluding the current user"""
+    if not current_user.department_id:
+        return []
+    
     result = db.execute(
         text(
             """
@@ -1030,13 +913,14 @@ async def get_team_requests(
             JOIN users u ON u.user_id = r.user_id
             WHERE r.user_id != :user_id
               AND r.deleted_at IS NULL
+              AND u.department_id = :dept_id
             ORDER BY r.created_at DESC
             """
         ),
-        {"user_id": current_user.user_id},
+        {"user_id": current_user.user_id, "dept_id": current_user.department_id},
     ).fetchall()
     
-    print(f"Found {len(result)} team requests for user {current_user.user_id}")
+    logger.info("Found %d team requests for user %s", len(result), current_user.user_id)
 
     requests = []
 
@@ -1050,7 +934,6 @@ async def get_team_requests(
         else:
             date_range = start_date.strftime("%b %d")
         
-        # Calculate duration - for leave duty station, show "travelling day" instead of duration
         if row[1].lower() == "leave duty station":
             duration = "travelling day"
         else:
@@ -1086,7 +969,7 @@ async def deny_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     
     # Allow any approver with the correct role to deny
-    now = datetime.utcnow()
+    now = get_current_time()
     req.status = 'denied'
     req.updated_at = now
     req.current_approver_id = None
@@ -1143,7 +1026,7 @@ async def deny_request(
                 force_send=True
             )
         except Exception as e:
-            print(f"Failed to send denial notification: {e}")
+            logger.warning("Failed to send denial notification: %s", e)
 
     return {"success": True}
 
@@ -1189,7 +1072,7 @@ async def simple_reject_request(
         if not is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not current approver")
 
-    now = datetime.utcnow()
+    now = get_current_time()
     
     # Create rejection approval record
     approval = RequestApproval(
@@ -1234,6 +1117,6 @@ async def simple_reject_request(
                 force_send=True
             )
         except Exception as e:
-            print(f"Failed to send rejection notification: {e}")
+            logger.warning("Failed to send rejection notification: %s", e)
 
     return {"success": True}

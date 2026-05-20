@@ -1,10 +1,11 @@
 from datetime import datetime
+from timezone_config import get_current_time
 import uuid
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import get_db
 from models.db_models import User, Notification, UserFCMToken
@@ -22,26 +23,25 @@ class NotificationCreate(BaseModel):
     recipient_user_id: Optional[str] = None
 
 class BroadcastNotification(BaseModel):
-    title: str
-    body: str
-    notification_type: str  # app_update, maintenance, incident, general
-    target: str = "all"  # all, department, role
-    target_value: Optional[str] = None  # department name or role name if target is not all
+    title: str = Field(max_length=200)
+    body: str = Field(max_length=2000)
+    notification_type: str = Field(max_length=50)
+    target: str = Field(default="all", max_length=20)
+    target_value: Optional[str] = Field(default=None, max_length=100)
     data: Optional[dict] = None
 
 class AdvancedBroadcastNotification(BaseModel):
-    title: str
-    body: str
-    notification_type: str = "general"
+    title: str = Field(max_length=200)
+    body: str = Field(max_length=2000)
+    notification_type: str = Field(default="general", max_length=50)
     data: Optional[dict] = None
     
-    # Enhanced targeting options
-    target_audience: Optional[str] = "all"  # 'all', 'department', 'role'
-    specific_users: Optional[List[str]] = None  # Specific user IDs
-    department_filter: Optional[str] = None  # Department name filter
-    role_filter: Optional[str] = None  # Role name filter
-    user_type_filter: Optional[List[str]] = None  # Multiple user types
-    status_filter: Optional[str] = None  # User status filter (active, inactive, etc.)
+    target_audience: Optional[str] = Field(default="all", max_length=20)
+    specific_users: Optional[List[str]] = None
+    department_filter: Optional[str] = Field(default=None, max_length=150)
+    role_filter: Optional[str] = Field(default=None, max_length=100)
+    user_type_filter: Optional[List[str]] = None
+    status_filter: Optional[str] = Field(default=None, max_length=30)
 
 class NotificationResponse(BaseModel):
     id: str
@@ -89,18 +89,18 @@ async def register_fcm_token(
         if existing_token.user_id != current_user.user_id:
             # Token transferred to another user
             existing_token.user_id = current_user.user_id
-            existing_token.updated_at = datetime.now()
+            existing_token.updated_at = get_current_time()
         else:
             # Token already belongs to this user, just update timestamp
-            existing_token.updated_at = datetime.now()
+            existing_token.updated_at = get_current_time()
     else:
         # Create new token record
         new_token = UserFCMToken(
             user_id=current_user.user_id,
             fcm_token=registration.fcm_token,
             device_id=registration.device_id,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
+            created_at=get_current_time(),
+            updated_at=get_current_time()
         )
         db.add(new_token)
     
@@ -157,8 +157,8 @@ async def create_notification(
         message=notification.message,
         type=notification.type,
         is_read=False,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+        created_at=get_current_time(),
+        updated_at=get_current_time()
     )
     
     db.add(new_notification)
@@ -206,7 +206,7 @@ async def mark_notification_read(
         raise HTTPException(status_code=404, detail="Notification not found")
     
     notification.is_read = True
-    notification.updated_at = datetime.now()
+    notification.updated_at = get_current_time()
     db.commit()
     
     return {"message": "Notification marked as read"}
@@ -221,7 +221,7 @@ async def mark_all_notifications_read(
     db.query(Notification).filter(
         Notification.user_id == current_user.user_id,
         Notification.is_read == False
-    ).update({"is_read": True, "updated_at": datetime.now()})
+    ).update({"is_read": True, "updated_at": get_current_time()})
     
     db.commit()
     
@@ -262,7 +262,7 @@ async def test_push_notification(
                 token=token_record.fcm_token,
                 title=title,
                 body=body,
-                data={"test": "true", "timestamp": str(datetime.now())}
+                data={"test": "true", "timestamp": str(get_current_time())}
             )
             results.append({
                 "token": token_record.fcm_token[:20] + "...",
@@ -361,7 +361,7 @@ async def send_broadcast_notification(
         # Prepare FCM data payload with type included
         fcm_data = broadcast.data or {}
         fcm_data['type'] = notification_type
-        fcm_data['sent_at'] = datetime.now().isoformat()
+        fcm_data['sent_at'] = get_current_time().isoformat()
         
         fcm_responses = []
         
@@ -380,18 +380,12 @@ async def send_broadcast_notification(
                 )
                 fcm_responses.append({
                     "user_id": str(token_record.user_id),
-                    "user_name": f"{user.first_name} {user.surname}".strip(),
-                    "role": getattr(user.role, 'name', 'unknown') if user.role else 'unknown',
-                    "department": getattr(user.department, 'name', 'unknown') if user.department else 'unknown',
                     "result": resp
                 })
             except Exception as e:
                 logger.error(f"Error sending FCM to token {token_record.fcm_token}: {str(e)}")
                 fcm_responses.append({
                     "user_id": str(token_record.user_id),
-                    "user_name": f"{user.first_name} {user.surname}".strip(),
-                    "role": getattr(user.role, 'name', 'unknown') if user.role else 'unknown',
-                    "department": getattr(user.department, 'name', 'unknown') if user.department else 'unknown',
                     "error": str(e)
                 })
         
@@ -436,8 +430,8 @@ async def send_broadcast_notification(
                 message=broadcast.body,
                 type=notification_type,
                 is_read=False,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(new_notification)
 
@@ -762,18 +756,12 @@ async def send_advanced_broadcast_notification(
                 )
                 fcm_responses.append({
                     "user_id": str(token_record.user_id),
-                    "user_name": f"{user.first_name} {user.surname}".strip(),
-                    "role": getattr(user.role, 'name', 'unknown') if user.role else 'unknown',
-                    "department": getattr(user.department, 'name', 'unknown') if user.department else 'unknown',
                     "result": resp
                 })
             except Exception as e:
                 logger.error(f"Error sending FCM to token {token_record.fcm_token}: {str(e)}")
                 fcm_responses.append({
                     "user_id": str(token_record.user_id),
-                    "user_name": f"{user.first_name} {user.surname}".strip(),
-                    "role": getattr(user.role, 'name', 'unknown') if user.role else 'unknown',
-                    "department": getattr(user.department, 'name', 'unknown') if user.department else 'unknown',
                     "error": str(e)
                 })
         
@@ -822,8 +810,8 @@ async def send_advanced_broadcast_notification(
                 message=broadcast.body,
                 type=notification_type,
                 is_read=False,
-                created_at=datetime.now(),
-                updated_at=datetime.now()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(new_notification)
 

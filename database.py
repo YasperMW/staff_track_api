@@ -1,9 +1,13 @@
+import logging
+from timezone_config import get_current_time
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -25,24 +29,23 @@ def create_database_if_not_exists():
 
     try:
         with temp_engine.connect() as conn:
-            # Check if database exists
             result = conn.execute(
-                text(f"SELECT 1 FROM pg_database WHERE datname = '{database_name}'")
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": database_name},
             )
             exists = result.fetchone()
 
             if not exists:
-                print(f"Database '{database_name}' does not exist. Creating...")
-                conn.execute(text(f'CREATE DATABASE "{database_name}"'))
-                print(f"Database '{database_name}' created successfully.")
+                logger.info("Database '%s' does not exist. Creating...", database_name)
+                conn.execute(text('CREATE DATABASE "{}"'.format(database_name)))
+                logger.info("Database '%s' created successfully.", database_name)
     except Exception as e:
         error_msg = str(e)
         if "permission denied" in error_msg.lower() or "insufficientprivilege" in error_msg.lower():
-            print(f"Warning: Cannot create database '{database_name}' - user lacks CREATEDB permission.")
-            print(f"Please create the database manually or grant CREATEDB permission to the user.")
-            print(f"Run: CREATE DATABASE \"{database_name}\"; as a superuser, or: ALTER USER your_user CREATEDB;")
+            logger.warning("Cannot create database '%s' - user lacks CREATEDB permission.", database_name)
+            logger.warning("Create manually or grant CREATEDB permission to the user.")
         else:
-            print(f"Error checking/creating database: {e}")
+            logger.error("Error checking/creating database: %s", e)
             raise
     finally:
         temp_engine.dispose()
@@ -57,21 +60,17 @@ def create_extensions():
             # Create uuid-ossp extension for UUID generation
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""))
             conn.commit()
-            print("PostgreSQL extensions (postgis, uuid-ossp) created/verified successfully.")
+            logger.info("PostgreSQL extensions (postgis, uuid-ossp) created/verified successfully.")
     except Exception as e:
         error_msg = str(e)
         if "could not open extension control file" in error_msg.lower():
-            print("Error: PostGIS extension is not installed on the PostgreSQL server.")
-            print("Please install PostGIS on your PostgreSQL server first.")
-            print("On Ubuntu/Debian: sudo apt-get install postgresql-<version>-postgis-3")
-            print("On macOS with Homebrew: brew install postgis")
+            logger.error("PostGIS extension is not installed on the PostgreSQL server.")
             raise
         elif "permission denied" in error_msg.lower():
-            print("Warning: Cannot create extensions - user lacks permission.")
-            print("Please run as superuser: CREATE EXTENSION postgis; CREATE EXTENSION \"uuid-ossp\";")
+            logger.warning("Cannot create extensions - user lacks permission.")
             raise
         else:
-            print(f"Error creating extensions: {e}")
+            logger.error("Error creating extensions: %s", e)
             raise
 
 
@@ -130,16 +129,16 @@ def seed_roles():
             if not existing_role:
                 new_role = Role(
                     name=role_name,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    created_at=get_current_time(),
+                    updated_at=get_current_time()
                 )
                 db.add(new_role)
-                print(f"Created role: {role_name}")
+                logger.info("Created role: %s", role_name)
 
         db.commit()
-        print("Role seeding completed successfully.")
+        logger.info("Role seeding completed successfully.")
     except Exception as e:
-        print(f"Error seeding roles: {e}")
+        logger.error("Error seeding roles: %s", e)
         db.rollback()
     finally:
         db.close()
@@ -158,7 +157,7 @@ def seed_default_admin():
         if existing_users:
             return  # Database already has users
 
-        print("No users found. Creating default System Admin account...")
+        logger.info("No users found. Creating default System Admin account...")
 
         # Create default Grade
         default_grade = db.query(Grade).filter(Grade.name == "Default").first()
@@ -166,8 +165,8 @@ def seed_default_admin():
             default_grade = Grade(
                 name="Default",
                 annual_leave_days=21,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(default_grade)
             db.commit()
@@ -178,8 +177,8 @@ def seed_default_admin():
         if not admin_role:
             admin_role = Role(
                 name="System Admin",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(admin_role)
             db.commit()
@@ -191,8 +190,8 @@ def seed_default_admin():
             admin_dept = Department(
                 name="Administration",
                 description="Hospital Administration",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(admin_dept)
             db.commit()
@@ -205,8 +204,8 @@ def seed_default_admin():
                 name="System Administrator",
                 description="System Administrator",
                 department_id=admin_dept.department_id,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(admin_designation)
             db.commit()
@@ -228,23 +227,20 @@ def seed_default_admin():
             designation_id=admin_designation.designation_id,
             grade_id=default_grade.grade_id,
             status="active",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=get_current_time(),
+            updated_at=get_current_time()
         )
         db.add(admin_user)
         db.commit()
         db.refresh(admin_user)
 
-        print("=" * 60)
-        print("DEFAULT SYSTEM ADMIN ACCOUNT CREATED")
-        print("=" * 60)
-        print(f"Email: {admin_user.email}")
-        print(f"Password: {default_password}")
-        print("IMPORTANT: Please change this password after first login!")
-        print("=" * 60)
+        logger.info("DEFAULT SYSTEM ADMIN ACCOUNT CREATED")
+        logger.info("Email: %s", admin_user.email)
+        logger.info("Password: %s", default_password)
+        logger.warning("IMPORTANT: Please change this password after first login!")
 
     except Exception as e:
-        print(f"Error creating default admin: {e}")
+        logger.error("Error creating default admin: %s", e)
         db.rollback()
     finally:
         db.close()
@@ -401,8 +397,30 @@ def run_database_migrations():
                 ON CONFLICT (shift_name) DO NOTHING;
             """))
 
+            # Add is_extended column to attendance_logs
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'attendance_logs'
+                        AND column_name = 'is_extended'
+                    ) THEN
+                        ALTER TABLE attendance_logs ADD COLUMN is_extended BOOLEAN DEFAULT FALSE;
+                        RAISE NOTICE 'Added is_extended column to attendance_logs';
+                    END IF;
+                END $$;
+            """))
+
+            # Backfill is_extended for existing records where shift_type contains 'Extended'
+            conn.execute(text("""
+                UPDATE attendance_logs
+                SET is_extended = TRUE
+                WHERE shift_type LIKE '%→ Extended%'
+                  AND (is_extended IS NULL OR is_extended = FALSE)
+            """))
+
             conn.commit()
-            print("Database migrations completed successfully.")
+            logger.info("Database migrations completed successfully.")
     except Exception as e:
-        print(f"Warning: Database migration check failed: {e}")
-        print("This is normal if columns already exist.")
+        logger.warning("Database migration check failed: %s", e)

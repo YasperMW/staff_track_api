@@ -15,7 +15,21 @@ from notification_service import NotificationService
 from mail_service import email_service
 from timezone_config import get_current_time, to_app_timezone, timezone_aware, get_day_start, get_day_end, get_year_start, format_time, format_time_short, format_date
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/attendance", tags=["attendance"])
+
+# Validate geofence configuration at startup
+_geofence_center_lat = os.getenv("GEOFENCE_CENTER_LAT")
+_geofence_center_lon = os.getenv("GEOFENCE_CENTER_LON")
+_geofence_radius = os.getenv("GEOFENCE_RADIUS_METERS")
+if not all([_geofence_center_lat, _geofence_center_lon, _geofence_radius]):
+    logger.warning(
+        "Geofence is not fully configured. "
+        "Set GEOFENCE_CENTER_LAT, GEOFENCE_CENTER_LON, and GEOFENCE_RADIUS_METERS "
+        "to enable location-based check-in/out restrictions."
+    )
 
 # Database-driven Shift Time Definitions
 class ShiftTimes:
@@ -243,14 +257,16 @@ class ShiftTimes:
         return fixed_count
     
     @classmethod
-    def get_final_shift_type(cls, initial_shift: str, check_in_time: datetime, check_out_time: datetime, db: Session) -> str:
-        """Determine final shift type including extended status"""
+    def get_final_shift_type(cls, initial_shift: str, check_in_time: datetime, check_out_time: datetime, db: Session) -> tuple[str, bool]:
+        """Determine final shift type including extended status.
+        Returns (display_shift_type, is_extended)."""
         checkout_classification = cls.classify_check_out(check_out_time, initial_shift, check_in_time, db)
+        is_extended = checkout_classification["is_extended"]
         
-        if checkout_classification["is_extended"]:
-            return f"{initial_shift} → Extended"
+        if is_extended:
+            return f"{initial_shift} → Extended", True
         else:
-            return initial_shift
+            return initial_shift, False
 
 @router.get("/my-profile-metrics")
 async def get_my_profile_metrics(
@@ -364,14 +380,14 @@ async def check_in(
         )
     
     # Debug logging
-    print(f"DEBUG: Check-in request received:")
-    print(f"  location: {location}")
-    print(f"  latitude: {latitude}")
-    print(f"  longitude: {longitude}")
-    print(f"  accuracy: {accuracy}")
-    print(f"  device_id: {device_id}")
-    print(f"  shift_type: {shift_type}")
-    print(f"  user_id: {current_user.user_id}")
+    logger.info("DEBUG: Check-in request received:")
+    logger.info("  location: %s", location)
+    logger.info("  latitude: %s", latitude)
+    logger.info("  longitude: %s", longitude)
+    logger.info("  accuracy: %s", accuracy)
+    logger.info("  device_id: %s", device_id)
+    logger.info("  shift_type: %s", shift_type)
+    logger.info("  user_id: %s", current_user.user_id)
     
     # Check if user already checked in today (not checked out)
     current_time = get_current_time()
@@ -381,8 +397,9 @@ async def check_in(
     # Determine shift for current check-in server-side (do not trust client clock/timezone)
     server_shift_type = ShiftTimes.determine_shift_type(current_time, db)
     if requested_shift_type and requested_shift_type != server_shift_type:
-        print(
-            f"WARNING: Client-provided shift_type '{requested_shift_type}' does not match server shift_type '{server_shift_type}' at {current_time}. Overriding with server value."
+        logger.warning(
+            "WARNING: Client-provided shift_type '%s' does not match server shift_type '%s' at %s. Overriding with server value.",
+            requested_shift_type, server_shift_type, current_time
         )
     shift_type = server_shift_type
     
@@ -449,7 +466,7 @@ async def check_in(
         current_base_shift = shift_type.split(" → ")[0] if " → " in shift_type else shift_type
 
         if active_base_shift != current_base_shift:
-            print(f"ALLOWING DOUBLE SHIFT: {active_base_shift} + {current_base_shift}")
+            logger.info("ALLOWING DOUBLE SHIFT: %s + %s", active_base_shift, current_base_shift)
         else:
             # This should not happen due to the earlier check, but added as safety
             raise HTTPException(
@@ -497,19 +514,19 @@ async def check_in(
                 dist = r*c
             except Exception as e:
                 # If geofence calculation fails, log and continue without blocking
-                print(f"Geofence calculation error for check-in: {e}")
+                logger.warning("Geofence calculation error for check-in: %s", e)
                 dist = None
                 rad = None
 
         # If we successfully calculated distance and have a radius, enforce geofence
         if dist is not None and rad is not None:
             # Debug logging for geofence calculation
-            print(f"GEOFENCE DEBUG (Check-in):")
-            print(f"  Center: {center_lat}, {center_lon}")
-            print(f"  User Location: {latitude}, {longitude}")
-            print(f"  Radius: {rad}m")
-            print(f"  Distance: {dist:.1f}m")
-            print(f"  Is Violation: {dist > rad}")
+            logger.info("GEOFENCE DEBUG (Check-in):")
+            logger.info("  Center: %s, %s", center_lat, center_lon)
+            logger.info("  User Location: %s, %s", latitude, longitude)
+            logger.info("  Radius: %sm", rad)
+            logger.info("  Distance: %.1fm", dist)
+            logger.info("  Is Violation: %s", dist > rad)
 
             if dist > rad:
                 # Geofence violation detected - send notifications
@@ -580,17 +597,17 @@ async def check_in(
                     db.commit()
                     
                 except Exception as e:
-                    print(f"Failed to send geofence violation notifications: {e}")
+                    logger.warning("Failed to send geofence violation notifications: %s", e)
                 
-                print(f"RAISING HTTP EXCEPTION: Check-in blocked due to geofence violation")
+                logger.warning("RAISING HTTP EXCEPTION: Check-in blocked due to geofence violation")
                 # Propagate HTTPException so FastAPI returns 400 and stops processing
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Outside allowed work area")
 
         # Create PostGIS geography point from coordinates
         location_geo = WKTElement(f'POINT({longitude} {latitude})', srid=4326)
         location_str = f"POINT({longitude} {latitude})"
-        print(f"DEBUG: Created location_geo from coordinates: {location_geo}")
-        print(f"DEBUG: Created location_str: {location_str}")
+        logger.info("DEBUG: Created location_geo from coordinates: %s", location_geo)
+        logger.info("DEBUG: Created location_str: %s", location_str)
     elif location:
         # Try to parse location string as coordinates
         try:
@@ -601,13 +618,13 @@ async def check_in(
                     lon, lat = float(coords[0]), float(coords[1])
                     location_geo = WKTElement(f'POINT({lon} {lat})', srid=4326)
                     location_str = location
-                    print(f"DEBUG: Parsed location string to coordinates: {location_geo}")
+                    logger.info("DEBUG: Parsed location string to coordinates: %s", location_geo)
         except Exception as e:
-            print(f"DEBUG: Failed to parse location string: {e}")
+            logger.warning("DEBUG: Failed to parse location string: %s", e)
             location_str = location
     
-    print(f"DEBUG: Final location_geo: {location_geo}")
-    print(f"DEBUG: Final location_str: {location_str}")
+    logger.info("DEBUG: Final location_geo: %s", location_geo)
+    logger.info("DEBUG: Final location_str: %s", location_str)
     
     # Create attendance log - store local time directly
     attendance = AttendanceLog(
@@ -622,10 +639,10 @@ async def check_in(
         updated_at=current_time
     )
     
-    print(f"DEBUG: About to save attendance record:")
-    print(f"  attendance.location: {attendance.location}")
-    print(f"  attendance.accuracy: {attendance.accuracy}")
-    print(f"  attendance.device_id: {attendance.device_id}")
+    logger.info("DEBUG: About to save attendance record:")
+    logger.info("  attendance.location: %s", attendance.location)
+    logger.info("  attendance.accuracy: %s", attendance.accuracy)
+    logger.info("  attendance.device_id: %s", attendance.device_id)
     
     db.add(attendance)
     db.commit()
@@ -633,17 +650,17 @@ async def check_in(
     db.add(AuditLog(actor_id=current_user.user_id, action="check_in", entity="attendance", details={"attendance_log_id": str(attendance.attendance_log_id)}))
     db.commit()
     
-    print(f"DEBUG: After database commit:")
-    print(f"  saved attendance.location: {attendance.location}")
-    print(f"  saved attendance.accuracy: {attendance.accuracy}")
-    print(f"  saved attendance.device_id: {attendance.device_id}")
+    logger.info("DEBUG: After database commit:")
+    logger.info("  saved attendance.location: %s", attendance.location)
+    logger.info("  saved attendance.accuracy: %s", attendance.accuracy)
+    logger.info("  saved attendance.device_id: %s", attendance.device_id)
     
     # Send check-in confirmation notification
-    print(f" CHECK-IN NOTIFICATION PROCESS STARTING")
-    print(f"   User: {current_user.first_name} {current_user.surname} ({current_user.user_id})")
-    print(f"   Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"   Location: {location_str or 'N/A'}")
-    print(f"   Shift: {attendance.shift_type or 'Day Shift'}")
+    logger.info(" CHECK-IN NOTIFICATION PROCESS STARTING")
+    logger.info("   User: %s %s (%s)", current_user.first_name, current_user.surname, current_user.user_id)
+    logger.info("   Time: %s", current_time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("   Location: %s", location_str or 'N/A')
+    logger.info("   Shift: %s", attendance.shift_type or 'Day Shift')
     
     try:
         result = await NotificationService.send_notification(
@@ -662,18 +679,18 @@ async def check_in(
         )
         
         if result.get("status") == "success":
-            print(f" CHECK-IN NOTIFICATION SENT SUCCESSFULLY")
-            print(f"   Result: {result}")
+            logger.info(" CHECK-IN NOTIFICATION SENT SUCCESSFULLY")
+            logger.info("   Result: %s", result)
         else:
-            print(f" CHECK-IN NOTIFICATION FAILED")
-            print(f"   Result: {result}")
+            logger.warning(" CHECK-IN NOTIFICATION FAILED")
+            logger.warning("   Result: %s", result)
         
 
         
-        print(f" CHECK-IN NOTIFICATION PROCESS COMPLETED")
+        logger.info(" CHECK-IN NOTIFICATION PROCESS COMPLETED")
     
     except Exception as e:
-        print(f"Failed to send check-in notification: {e}")
+        logger.warning("Failed to send check-in notification: %s", e)
     
     return {
         "message": "Check-in successful",
@@ -708,13 +725,13 @@ async def check_out(
         )
     
     # Debug logging
-    print(f"DEBUG: Check-out request received:")
-    print(f"  location: {location}")
-    print(f"  latitude: {latitude}")
-    print(f"  longitude: {longitude}")
-    print(f"  accuracy: {accuracy}")
-    print(f"  device_id: {device_id}")
-    print(f"  user_id: {current_user.user_id}")
+    logger.info("DEBUG: Check-out request received:")
+    logger.info("  location: %s", location)
+    logger.info("  latitude: %s", latitude)
+    logger.info("  longitude: %s", longitude)
+    logger.info("  accuracy: %s", accuracy)
+    logger.info("  device_id: %s", device_id)
+    logger.info("  user_id: %s", current_user.user_id)
     
     # Find active attendance records (checked in but not out)
     # Always check both today's records and yesterday's unresolved night shifts
@@ -751,7 +768,7 @@ async def check_out(
     active_attendances = list(active_attendances) + list(yesterday_unresolved)
 
     if active_attendances:
-        print(f"DEBUG: Found {len(active_attendances)} active check-in(s) - {len(yesterday_unresolved)} from yesterday")
+        logger.info("DEBUG: Found %d active check-in(s) - %d from yesterday", len(active_attendances), len(yesterday_unresolved))
 
     if not active_attendances:
         raise HTTPException(
@@ -820,18 +837,18 @@ async def check_out(
                 c = 2*math.atan2(math.sqrt(a), math.sqrt(1-a))
                 dist = r*c
             except Exception as e:
-                print(f"Geofence calculation error for check-out: {e}")
+                logger.warning("Geofence calculation error for check-out: %s", e)
                 dist = None
                 rad = None
 
         if dist is not None and rad is not None:
             # Debug logging for geofence calculation
-            print(f"GEOFENCE DEBUG (Check-out):")
-            print(f"  Center: {center_lat}, {center_lon}")
-            print(f"  User Location: {latitude}, {longitude}")
-            print(f"  Radius: {rad}m")
-            print(f"  Distance: {dist:.1f}m")
-            print(f"  Is Violation: {dist > rad}")
+            logger.info("GEOFENCE DEBUG (Check-out):")
+            logger.info("  Center: %s, %s", center_lat, center_lon)
+            logger.info("  User Location: %s, %s", latitude, longitude)
+            logger.info("  Radius: %sm", rad)
+            logger.info("  Distance: %.1fm", dist)
+            logger.info("  Is Violation: %s", dist > rad)
             
             if dist > rad:
                 # Geofence violation detected - send notifications and block
@@ -904,11 +921,11 @@ async def check_out(
                     db.commit()
                     
                 except Exception as e:
-                    print(f"Failed to send geofence violation notifications for check-out: {e}")
+                    logger.warning("Failed to send geofence violation notifications for check-out: %s", e)
                 
                 # Block check-out for geofence violations (same as check-in)
-                print(f"RAISING HTTP EXCEPTION: Check-out blocked due to geofence violation")
-                print(f"DEBUG: Check-out blocked due to geofence violation. Distance: {dist:.1f}m, Radius: {rad}m")
+                logger.warning("RAISING HTTP EXCEPTION: Check-out blocked due to geofence violation")
+                logger.warning("DEBUG: Check-out blocked due to geofence violation. Distance: %.1fm, Radius: %sm", dist, rad)
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Outside allowed work area")
         
         # Update location
@@ -924,7 +941,7 @@ async def check_out(
                     attendance.location = WKTElement(f'POINT({lon} {lat})', srid=4326)
                     location_str = location
         except Exception as e:
-            print(f"DEBUG: Failed to parse location string for check-out: {e}")
+            logger.warning("DEBUG: Failed to parse location string for check-out: %s", e)
             location_str = location
     
     if accuracy is not None:
@@ -941,7 +958,9 @@ async def check_out(
     # Determine final shift type using centralized logic
     # Retrieve the shift type that was assigned at check-in (not recalculated)
     initial_shift = attendance.shift_type.split(" → ")[0] if " → " in (attendance.shift_type or "") else (attendance.shift_type or "Day Shift")
-    attendance.shift_type = ShiftTimes.get_final_shift_type(initial_shift, to_app_timezone(attendance.check_in_time), to_app_timezone(current_time), db)
+    final_shift, is_extended = ShiftTimes.get_final_shift_type(initial_shift, to_app_timezone(attendance.check_in_time), to_app_timezone(current_time), db)
+    attendance.shift_type = final_shift
+    attendance.is_extended = is_extended
     
     # Calculate and store work hours
     # Ensure both datetimes are naive for subtraction
@@ -976,7 +995,7 @@ async def check_out(
 
         
     except Exception as e:
-        print(f"Failed to send check-out notification: {e}")
+        logger.warning("Failed to send check-out notification: %s", e)
     
     # Convert PostGIS geography to string for API response
     location_str = None

@@ -1,133 +1,129 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=128)
 
 class RegisterRequest(BaseModel):
-    employee_number: str
-    national_id: str
-    suffix: Optional[str] = ""
-    first_name: str
-    surname: str
-    other_names: Optional[str] = ""
-    date_of_birth: str
-    gender: str
+    employee_number: str = Field(max_length=50)
+    national_id: str = Field(max_length=50)
+    suffix: Optional[str] = Field(default="", max_length=20)
+    first_name: str = Field(max_length=100)
+    surname: str = Field(max_length=100)
+    other_names: Optional[str] = Field(default="", max_length=150)
+    date_of_birth: str = Field(max_length=10)
+    gender: str = Field(max_length=10)
     email: EmailStr
-    phone: str
-    home_of_origin: str
-    traditional_authority: str
-    district: str
-    current_address: str
-    marital_status: Optional[str] = ""
-    spouse_name: Optional[str] = ""
-    spouse_contact: Optional[str] = ""
-    date_of_employment: str
-    designation_id: str
-    department_id: str
-    department: str
-    role: Optional[str] = None  # Role is now auto-determined from department and designation
-    grade_id: Optional[str] = None
-    profile_photo_url: Optional[str] = None
-    password: str
-    confirm_password: str
+    phone: str = Field(max_length=30)
+    home_of_origin: str = Field(max_length=150)
+    traditional_authority: str = Field(max_length=100)
+    district: str = Field(max_length=100)
+    current_address: str = Field(max_length=500)
+    marital_status: Optional[str] = Field(default="", max_length=20)
+    spouse_name: Optional[str] = Field(default="", max_length=150)
+    spouse_contact: Optional[str] = Field(default="", max_length=30)
+    date_of_employment: str = Field(max_length=10)
+    designation_id: str = Field(max_length=36)
+    department_id: str = Field(max_length=36)
+    department: str = Field(max_length=150)
+    role: Optional[str] = Field(default=None, max_length=100)
+    grade_id: Optional[str] = Field(default=None, max_length=36)
+    profile_photo_url: Optional[str] = Field(default=None, max_length=500)
+    password: str = Field(max_length=128)
+    confirm_password: str = Field(max_length=128)
 
-# Attendance request models
 class CheckInRequest(BaseModel):
-    location: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=500)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     accuracy: Optional[float] = None
-    device_id: Optional[str] = None
-    shift_type: Optional[str] = None
-    late_reason: Optional[str] = None  # Required if checking in late (after 09:00)
+    device_id: Optional[str] = Field(default=None, max_length=200)
+    shift_type: Optional[str] = Field(default=None, max_length=50)
+    late_reason: Optional[str] = Field(default=None, max_length=500)
 
 class CheckOutRequest(BaseModel):
-    location: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=500)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     accuracy: Optional[float] = None
-    device_id: Optional[str] = None
-    early_checkout_reason: Optional[str] = None  # Required if checking out early (before shift end)
+    device_id: Optional[str] = Field(default=None, max_length=200)
+    early_checkout_reason: Optional[str] = Field(default=None, max_length=500)
 
 class AuthResponse(BaseModel):
     success: bool
-    message: str
-    token: Optional[str] = None
+    message: str = Field(max_length=500)
+    token: Optional[str] = Field(default=None, max_length=2000)
     user: Optional[dict] = None
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
 
 class UserResponse(BaseModel):
-    id: str
-    email: str
-    first_name: str
-    surname: str
-    role: str
-    employee_number: str
-    department: str
-    designation: str
+    id: str = Field(max_length=36)
+    email: str = Field(max_length=255)
+    first_name: str = Field(max_length=100)
+    surname: str = Field(max_length=100)
+    role: str = Field(max_length=100)
+    employee_number: str = Field(max_length=50)
+    department: str = Field(max_length=150)
+    designation: str = Field(max_length=150)
 
 class OTPRequest(BaseModel):
     email: EmailStr
-    purpose: str = "registration"  # registration, password_reset
+    purpose: str = Field(default="registration", max_length=20)
 
 class OTPVerifyRequest(BaseModel):
     email: EmailStr
-    otp_code: str
-    purpose: str = "registration"
+    otp_code: str = Field(max_length=6)
+    purpose: str = Field(default="registration", max_length=20)
 
 class ConfirmPasswordResetRequest(BaseModel):
     email: EmailStr
-    otp_code: str
-    new_password: str
+    otp_code: str = Field(max_length=6)
+    new_password: str = Field(max_length=128)
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)
 
 class OTPResponse(BaseModel):
     success: bool
-    message: str
+    message: str = Field(max_length=500)
     verified: bool = False
 
 
 # Google OAuth Models
 class GoogleAuthRequest(BaseModel):
-    id_token: str  # Google ID token from Flutter
+    id_token: str = Field(max_length=2000)
 
 
 class GoogleCheckResponse(BaseModel):
     exists: bool
     user: Optional[dict] = None
-    google_data: Optional[dict] = None  # Pre-fill data: email, first_name, surname, photo
-    token: Optional[str] = None  # JWT token if user exists
+    google_data: Optional[dict] = None
+    token: Optional[str] = Field(default=None, max_length=2000)
 
 
 class GoogleRegisterRequest(BaseModel):
-    # Google ID token (will be verified to extract google_id, email, name)
-    id_token: str
-    # User-provided fields
-    employee_number: str
-    national_id: str
-    phone: str
-    department: str
-    department_id: str
-    designation_id: str
-    grade_id: Optional[str] = None
-    date_of_employment: str
-    date_of_birth: str
-    gender: str
-    home_of_origin: str
-    traditional_authority: str
-    district: str
-    current_address: str
-    # Optional fields
-    suffix: Optional[str] = ""
-    other_names: Optional[str] = ""
-    marital_status: Optional[str] = ""
-    spouse_name: Optional[str] = ""
-    spouse_contact: Optional[str] = ""
-    profile_photo_url: Optional[str] = None  # Override Google photo if provided
+    id_token: str = Field(max_length=2000)
+    employee_number: str = Field(max_length=50)
+    national_id: str = Field(max_length=50)
+    phone: str = Field(max_length=30)
+    department: str = Field(max_length=150)
+    department_id: str = Field(max_length=36)
+    designation_id: str = Field(max_length=36)
+    grade_id: Optional[str] = Field(default=None, max_length=36)
+    date_of_employment: str = Field(max_length=10)
+    date_of_birth: str = Field(max_length=10)
+    gender: str = Field(max_length=10)
+    home_of_origin: str = Field(max_length=150)
+    traditional_authority: str = Field(max_length=100)
+    district: str = Field(max_length=100)
+    current_address: str = Field(max_length=500)
+    suffix: Optional[str] = Field(default="", max_length=20)
+    other_names: Optional[str] = Field(default="", max_length=150)
+    marital_status: Optional[str] = Field(default="", max_length=20)
+    spouse_name: Optional[str] = Field(default="", max_length=150)
+    spouse_contact: Optional[str] = Field(default="", max_length=30)
+    profile_photo_url: Optional[str] = Field(default=None, max_length=500)

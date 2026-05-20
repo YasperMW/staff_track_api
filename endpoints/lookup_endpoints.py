@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from database import get_db
 from models.db_models import Role, Department, Designation, User
 from datetime import datetime
+from timezone_config import get_current_time
 import uuid
 
 router = APIRouter()
@@ -161,7 +162,7 @@ async def create_department(department_data: DepartmentCreate, db: Session = Dep
         
         # Create new department
         department_id = uuid.uuid4()
-        now = datetime.now()
+        now = get_current_time()
         
         db.execute(
             text("""
@@ -229,7 +230,7 @@ async def update_department(department_id: str, department_data: DepartmentUpdat
         
         # Build update query dynamically
         update_fields = []
-        update_values = {"department_id": department_id, "updated_at": datetime.now()}
+        update_values = {"department_id": department_id, "updated_at": get_current_time()}
         
         if department_data.name is not None:
             update_fields.append("name = :name")
@@ -307,8 +308,8 @@ async def delete_department(department_id: str, db: Session = Depends(get_db)):
             """),
             {
                 "department_id": department_id,
-                "deleted_at": datetime.now(),
-                "updated_at": datetime.now()
+                "deleted_at": get_current_time(),
+                "updated_at": get_current_time()
             }
         )
         db.commit()
@@ -399,7 +400,7 @@ async def create_designation(designation_data: DesignationCreate, db: Session = 
         
         # Create new designation
         designation_id = uuid.uuid4()
-        now = datetime.now()
+        now = get_current_time()
         
         db.execute(
             text("""
@@ -487,7 +488,7 @@ async def update_designation(designation_id: str, designation_data: DesignationU
         
         # Build update query dynamically
         update_fields = []
-        update_values = {"designation_id": designation_id, "updated_at": datetime.now()}
+        update_values = {"designation_id": designation_id, "updated_at": get_current_time()}
         
         if designation_data.name is not None:
             update_fields.append("name = :name")
@@ -569,8 +570,8 @@ async def delete_designation(designation_id: str, db: Session = Depends(get_db))
             """),
             {
                 "designation_id": designation_id,
-                "deleted_at": datetime.now(),
-                "updated_at": datetime.now()
+                "deleted_at": get_current_time(),
+                "updated_at": get_current_time()
             }
         )
         db.commit()

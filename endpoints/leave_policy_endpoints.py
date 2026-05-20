@@ -9,6 +9,9 @@ from models.db_models import User, Role, Department, LeaveBalance, Notification
 from datetime import datetime
 from fcm_service import send_push_notification
 from mail_service import email_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/leave/policies", tags=["leave"])
 
@@ -120,7 +123,7 @@ async def apply_policy(
                     target_department=payload.department_name
                 )
             except Exception as e:
-                print(f"Failed to send leave policy email to {u.email}: {e}")
+                logger.warning("Failed to send leave policy email to %s: %s", u.email, e)
         
         # Send push notification if user has FCM tokens
         if u.fcm_tokens:
@@ -138,7 +141,7 @@ async def apply_policy(
                         }
                     )
                 except Exception as e:
-                    print(f"Failed to send leave policy push notification: {e}")
+                    logger.warning("Failed to send leave policy push notification: %s", e)
     
     # Bulk insert notifications
     if notifications_to_create:

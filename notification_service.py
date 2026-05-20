@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from timezone_config import get_current_time
 from typing import Optional, List, Dict, Any
 from models.db_models import User, Notification, NotificationPreference, UserFCMToken
 from fcm_service import send_push_notification
@@ -64,7 +65,7 @@ class NotificationService:
             rate_limit = NotificationService.RATE_LIMITS.get(category, 10)
             
             # Count notifications in the last hour for this user and type
-            one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+            one_hour_ago = get_current_time() - timedelta(hours=1)
             count = db.query(Notification).filter(
                 Notification.user_id == user_id,
                 Notification.type == notification_type,
@@ -90,7 +91,7 @@ class NotificationService:
             content_hash = NotificationService.generate_content_hash(title, message, user_id, notification_type)
             
             # Check for similar notifications within the deduplication window
-            window_start = datetime.utcnow() - timedelta(minutes=dedup_window)
+            window_start = get_current_time() - timedelta(minutes=dedup_window)
             
             # Look for notifications with same content hash or similar content
             similar_notifications = db.query(Notification).filter(
@@ -179,8 +180,8 @@ class NotificationService:
                     email_enabled=True,
                     push_enabled=True,
                     in_app_enabled=True,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    created_at=get_current_time(),
+                    updated_at=get_current_time()
                 )
                 db.add(preference)
         
@@ -236,8 +237,8 @@ class NotificationService:
                     message=message,
                     type=notification_type,
                     is_read=False,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
+                    created_at=get_current_time(),
+                    updated_at=get_current_time()
                 )
                 db.add(notification)
                 db.commit()
@@ -422,8 +423,8 @@ class NotificationService:
                 email_enabled=email_enabled if email_enabled is not None else True,
                 push_enabled=push_enabled if push_enabled is not None else True,
                 in_app_enabled=in_app_enabled if in_app_enabled is not None else True,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=get_current_time(),
+                updated_at=get_current_time()
             )
             db.add(preference)
         else:
@@ -433,7 +434,7 @@ class NotificationService:
                 preference.push_enabled = push_enabled
             if in_app_enabled is not None:
                 preference.in_app_enabled = in_app_enabled
-            preference.updated_at = datetime.utcnow()
+            preference.updated_at = get_current_time()
         
         db.commit()
         logger.info(f"Updated notification preference for user {user_id}, category {category}")
@@ -473,7 +474,7 @@ class NotificationService:
     def get_notification_stats(db: Session, user_id: str, hours: int = 24) -> Dict[str, Any]:
         """Get notification statistics for a user"""
         try:
-            start_time = datetime.utcnow() - timedelta(hours=hours)
+            start_time = get_current_time() - timedelta(hours=hours)
             
             notifications = db.query(Notification).filter(
                 Notification.user_id == user_id,
