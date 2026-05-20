@@ -795,6 +795,65 @@ async def approve_request(
     return {"success": True}
 
 
+@router.get("/admin/my-requests")
+async def get_admin_my_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Alias for /my-requests for frontend compatibility"""
+    result = db.execute(
+        text(
+            """
+            SELECT 
+                r.request_id,
+                r.type,
+                r.start_date,
+                r.end_date,
+                r.status,
+                r.created_at
+            FROM requests r
+            WHERE r.user_id = :user_id
+              AND r.deleted_at IS NULL
+            ORDER BY r.created_at DESC
+            """
+        ),
+        {"user_id": current_user.user_id},
+    ).fetchall()
+
+    requests = []
+
+    for row in result:
+        start_date = row[2]
+        end_date = row[3]
+        if end_date and end_date != start_date:
+            date_range = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}"
+        else:
+            date_range = start_date.strftime("%b %d")
+
+        if row[1].lower() == "leave duty station":
+            duration = "travelling day"
+        else:
+            if end_date and end_date != start_date:
+                duration_days = (end_date - start_date).days + 1
+                duration = f"{duration_days} days"
+            else:
+                duration = "1 day"
+
+        requests.append(
+            {
+                "id": str(row[0]),
+                "type": row[1],
+                "status": row[4].capitalize(),
+                "date_range": date_range,
+                "duration": duration,
+                "description": f"{row[1]} request for {duration}",
+                "created_at": row[5].isoformat() if row[5] else None,
+            }
+        )
+
+    return requests
+
+
 @router.get("/my-requests")
 async def get_my_requests(
     db: Session = Depends(get_db),
