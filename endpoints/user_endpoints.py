@@ -3,10 +3,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from database import get_db
 from models.db_models import User, Role, Department, EmployeeFile, Grade
 from datetime import datetime, timedelta
 from timezone_config import get_current_time
+from endpoints.auth_endpoints import get_current_user
 import jwt
 import os
 from auth_config import SECRET_KEY, ALGORITHM
@@ -1153,3 +1155,207 @@ async def update_user_grade(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update user grade: {str(e)}"
         )
+
+
+@router.get("/export-data")
+async def export_user_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export all personal data for the current user (GDPR compliance)"""
+    logger.info("Data export requested by user: %s", current_user.user_id)
+    
+    user_data = {
+        "export_date": get_current_time().isoformat(),
+        "user": {
+            "user_id": str(current_user.user_id),
+            "employee_number": current_user.employee_number,
+            "first_name": current_user.first_name,
+            "surname": current_user.surname,
+            "other_names": current_user.other_names,
+            "email": current_user.email,
+            "phone": current_user.phone,
+            "contact_number": current_user.contact_number,
+            "date_of_birth": current_user.date_of_birth.isoformat() if current_user.date_of_birth else None,
+            "gender": current_user.gender,
+            "marital_status": current_user.marital_status,
+            "spouse_name": current_user.spouse_name,
+            "spouse_contact": current_user.spouse_contact,
+            "home_of_origin": current_user.home_of_origin,
+            "traditional_authority": current_user.traditional_authority,
+            "district": current_user.district,
+            "current_address": current_user.current_address,
+            "designation": current_user.designation,
+            "date_of_employment": current_user.date_of_employment.isoformat() if current_user.date_of_employment else None,
+            "status": current_user.status,
+            "selfie_verified": current_user.selfie_verified,
+            "is_head_of_department": current_user.is_head_of_department,
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+            "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None,
+        },
+        "role": {
+            "role_name": current_user.role.name if current_user.role else None,
+        },
+        "department": {
+            "department_name": current_user.department.name if current_user.department else None,
+        },
+        "grade": {
+            "grade_name": current_user.grade.name if current_user.grade else None,
+            "annual_leave_days": current_user.grade.annual_leave_days if current_user.grade else None,
+        } if current_user.grade else None,
+    }
+    
+    attendance_result = db.execute(
+        text(
+            """
+            SELECT 
+                a.attendance_id,
+                a.date,
+                a.check_in_time,
+                a.check_out_time,
+                a.status,
+                a.shift_type,
+                a.location_lat,
+                a.location_lng,
+                a.location_address,
+                a.created_at
+            FROM attendance a
+            WHERE a.user_id = :user_id
+            ORDER BY a.date DESC
+            LIMIT 1000
+            """
+        ),
+        {"user_id": current_user.user_id},
+    ).fetchall()
+    
+    user_data["attendance"] = [
+        {
+            "attendance_id": str(row[0]),
+            "date": row[1].isoformat() if row[1] else None,
+            "check_in_time": row[2].isoformat() if row[2] else None,
+            "check_out_time": row[3].isoformat() if row[3] else None,
+            "status": row[4],
+            "shift_type": row[5],
+            "location_lat": float(row[6]) if row[6] else None,
+            "location_lng": float(row[7]) if row[7] else None,
+            "location_address": row[8],
+            "created_at": row[9].isoformat() if row[9] else None,
+        }
+        for row in attendance_result
+    ]
+    
+    leave_result = db.execute(
+        text(
+            """
+            SELECT 
+                l.leave_id,
+                l.leave_type,
+                l.start_date,
+                l.end_date,
+                l.status,
+                l.reason,
+                l.approved_by,
+                l.approved_at,
+                l.created_at
+            FROM leaves l
+            WHERE l.user_id = :user_id
+            ORDER BY l.created_at DESC
+            LIMIT 500
+            """
+        ),
+        {"user_id": current_user.user_id},
+    ).fetchall()
+    
+    user_data["leaves"] = [
+        {
+            "leave_id": str(row[0]),
+            "leave_type": row[1],
+            "start_date": row[2].isoformat() if row[2] else None,
+            "end_date": row[3].isoformat() if row[3] else None,
+            "status": row[4],
+            "reason": row[5],
+            "approved_by": str(row[6]) if row[6] else None,
+            "approved_at": row[7].isoformat() if row[7] else None,
+            "created_at": row[8].isoformat() if row[8] else None,
+        }
+        for row in leave_result
+    ]
+    
+    requests_result = db.execute(
+        text(
+            """
+            SELECT 
+                r.request_id,
+                r.type,
+                r.start_date,
+                r.end_date,
+                r.status,
+                r.approval_level,
+                r.leave_grant_required,
+                r.contact_address,
+                r.reason_for_leaving,
+                r.travel_date,
+                r.travel_place,
+                r.created_at
+            FROM requests r
+            WHERE r.user_id = :user_id
+              AND r.deleted_at IS NULL
+            ORDER BY r.created_at DESC
+            LIMIT 500
+            """
+        ),
+        {"user_id": current_user.user_id},
+    ).fetchall()
+    
+    user_data["requests"] = [
+        {
+            "request_id": str(row[0]),
+            "type": row[1],
+            "start_date": row[2].isoformat() if row[2] else None,
+            "end_date": row[3].isoformat() if row[3] else None,
+            "status": row[4],
+            "approval_level": row[5],
+            "leave_grant_required": row[6],
+            "contact_address": row[7],
+            "reason_for_leaving": row[8],
+            "travel_date": row[9].isoformat() if row[9] else None,
+            "travel_place": row[10],
+            "created_at": row[11].isoformat() if row[11] else None,
+        }
+        for row in requests_result
+    ]
+    
+    notifications_result = db.execute(
+        text(
+            """
+            SELECT 
+                n.notification_id,
+                n.title,
+                n.message,
+                n.notification_type,
+                n.is_read,
+                n.created_at
+            FROM notifications n
+            WHERE n.user_id = :user_id
+            ORDER BY n.created_at DESC
+            LIMIT 500
+            """
+        ),
+        {"user_id": current_user.user_id},
+    ).fetchall()
+    
+    user_data["notifications"] = [
+        {
+            "notification_id": str(row[0]),
+            "title": row[1],
+            "message": row[2],
+            "notification_type": row[3],
+            "is_read": row[4],
+            "created_at": row[5].isoformat() if row[5] else None,
+        }
+        for row in notifications_result
+    ]
+    
+    logger.info("Data export completed for user: %s", current_user.user_id)
+    
+    return user_data
