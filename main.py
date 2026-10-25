@@ -15,10 +15,8 @@ from rate_limiter import IPRateLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 load_dotenv()
 
-# Create database tables
 Base.metadata.create_all(bind=engine)
 
 # Run database migrations (add new columns if they don't exist)
@@ -32,7 +30,6 @@ seed_default_admin()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     import asyncio
     from datetime import datetime
     from fastapi import BackgroundTasks
@@ -90,9 +87,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_attendance_scheduler_loop())
     
     yield
-    
-    # Shutdown (if needed)
-    pass
 
 app = FastAPI(
     title="Staff Track API",
@@ -162,6 +156,6 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("API_PORT", "8888"))  # Changed to match Flutter config
+    port = int(os.getenv("API_PORT", "8888"))
     debug = os.getenv("DEBUG", "false").lower() == "true"
     uvicorn.run(app, host=host, port=port, reload=debug)

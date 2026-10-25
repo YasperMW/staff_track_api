@@ -1,9 +1,10 @@
 import logging
+import os
+import secrets
 from timezone_config import get_current_time
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 
@@ -11,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/staff_track")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "Set it in your .env file or environment before starting the server."
+    )
 
 
 def create_database_if_not_exists():
@@ -211,16 +216,17 @@ def seed_default_admin():
             db.commit()
             db.refresh(admin_designation)
 
-        # Hash default password
-        default_password = "Admin@123"
+        default_password = os.getenv("DEFAULT_ADMIN_PASSWORD")
+        generated_password = default_password is None
+        if generated_password:
+            default_password = secrets.token_urlsafe(16)
         hashed_password = bcrypt.hashpw(default_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-        # Create System Admin user
         admin_user = User(
             employee_number="SYS001",
             first_name="System",
             surname="Admin",
-            email="admin@stafftrack.com",
+            email=os.getenv("DEFAULT_ADMIN_EMAIL", "admin@stafftrack.com"),
             password_hash=hashed_password,
             role_id=admin_role.role_id,
             department_id=admin_dept.department_id,
@@ -234,10 +240,10 @@ def seed_default_admin():
         db.commit()
         db.refresh(admin_user)
 
-        logger.info("DEFAULT SYSTEM ADMIN ACCOUNT CREATED")
-        logger.info("Email: %s", admin_user.email)
-        logger.info("Password: %s", default_password)
-        logger.warning("IMPORTANT: Please change this password after first login!")
+        logger.info("Default System Admin account created: %s", admin_user.email)
+        if generated_password:
+            logger.warning("Generated admin password: %s", default_password)
+        logger.warning("Change the admin password after the first login.")
 
     except Exception as e:
         logger.error("Error creating default admin: %s", e)

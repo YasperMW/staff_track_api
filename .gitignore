@@ -1,6 +1,41 @@
+# Secrets and local environment
 .env
+.env.*
+!.env.example
 serviceAccountKey.json
-*.pyc
-*.pyc
-__pycache__/database.cpython-312.pyc
-*.pyc
+*.pem
+*.key
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+venv312/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime data
+uploads/*
+!uploads/.gitkeep
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# OS
+.DS_Store
+Thumbs.db

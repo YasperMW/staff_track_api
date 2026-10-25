@@ -18,8 +18,9 @@ from sqlalchemy.orm import sessionmaker
 from models.db_models import AttendanceLog, ShiftConfiguration, User
 
 
-# Database URL - update this for your environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/staff_track")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set")
 
 
 def get_shift_type_from_time(check_time: datetime) -> str:
